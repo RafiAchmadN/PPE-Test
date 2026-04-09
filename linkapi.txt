@@ -1,0 +1,8 @@
+http://localhost/API.php
+http://localhost/API2.php
+http://localhost/API3.php
+http://localhost/API4.php
+https://monitoringggapddd.000webhostapp.com/API.php
+https://monitoringggapddd.000webhostapp.com/API2.php
+https://monitoringggapddd.000webhostapp.com/API3.php
+https://monitoringggapddd.000webhostapp.com/API4.php
