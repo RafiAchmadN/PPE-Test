@@ -1,4 +1,20 @@
+import os
+import sys
+
+# --- SOLUSI ERROR DLL: MATIKAN GPU SEBELUM IMPORT APAPUN ---
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["QT_API"] = "pyqt5"
+
 import cv2
+import numpy as np
+import torch
+import time
+import queue
+import math
+from datetime import date, datetime
+import requests
+
+# PyQt5 Imports
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, \
     QLabel, QGridLayout, QScrollArea, QSizePolicy, QMessageBox, \
     QPushButton, QVBoxLayout, QTabWidget, QHBoxLayout, QTableWidget, QTableWidgetItem, QDateEdit, QHeaderView, QDialog
@@ -6,31 +22,25 @@ from PyQt5.QtGui import QPixmap, QIcon, QImage, QPalette
 from PyQt5.QtSql import QSqlDatabase, QSqlQuery
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QEvent, QObject, QDateTime
 from PyQt5 import QtCore
-from datetime import date, datetime
-import requests
-import sys
-import numpy as np
-import time
-import os
-import queue
-import math
 
-# --- UPGRADE: Import Ultralytics untuk YOLO11 ---
+# YOLO Import
 from ultralytics import YOLO
 
+# --- SETUP JALUR (PATH) DRIVE C ---
+# Folder foto langsung ke folder public Laravel agar muncul di web
+output_folder = r'C:\laragon\www\webmonitoring\public\foto'
+# File database di dalam folder database Laravel
+database_path = r'C:\laragon\www\webmonitoring\database\logging.db'
+
 # --- SETUP MODEL ---
-# Ganti path ini dengan model YOLO11 custom Anda (misal: 'best.pt' hasil training YOLO11)
-# Jika belum ada custom, gunakan 'yolo11n.pt' (tapi class ID mungkin beda dengan model v5 lama Anda)
 try:
-    model = YOLO('best.pt')  # Pastikan file best.pt format YOLO11 ada
-except:
-    print("Model custom tidak ditemukan, menggunakan yolo11n standar.")
-    model = YOLO('yolo11n.pt') 
+    model = YOLO('best.pt')
+    model.to('cpu') 
+except Exception as e:
+    print(f"Model custom tidak ditemukan, menggunakan yolo11n standar. Error: {e}")
+    model = YOLO('yolo11n.pt')
+    model.to('cpu')
 
-# Konfigurasi Model
-# model.conf = 0.5  # Di YOLO11 conf diatur saat predict/inference
-
-output_folder = 'foto'
 if not os.path.exists(output_folder):
     os.makedirs(output_folder)
 
@@ -43,32 +53,30 @@ def read_ip_cameras(file_path):
                 if line.strip():
                     ip_cameras.append(line.strip())
     else:
-        print(f"File {file_path} tidak ditemukan!")
+        print(f"File {file_path} tidak ditemukan, menggunakan default webcam.")
+        ip_cameras.append("0")
     return ip_cameras
 
 file_path = "ipcamera.txt"
 array_ip_cameras = read_ip_cameras(file_path)
-NUM_CAMERAS = len(array_ip_cameras) # Jumlah kamera otomatis mengikuti isi file
+NUM_CAMERAS = len(array_ip_cameras)
 
-# Membuat Queue secara dinamis sesuai jumlah kamera
 frame_queues = [queue.Queue(maxsize=30) for _ in range(NUM_CAMERAS)]
 display_queues = [queue.Queue(maxsize=30) for _ in range(NUM_CAMERAS)]
 
 class ImageViewer(QDialog):
     def __init__(self, image_path):
         super().__init__()
-        self.setWindowTitle("Bukti")
-        self.setWindowIcon(QIcon(QPixmap("logo.png")))
+        self.setWindowTitle("Bukti Pelanggaran")
         layout = QVBoxLayout()
-        foto_path = f"foto/{image_path}"
+        foto_full_path = os.path.join(output_folder, image_path)
         label = QLabel()
-        pixmap = QPixmap(foto_path)
+        pixmap = QPixmap(foto_full_path)
         if not pixmap.isNull():
-             # Scale gambar agar tidak terlalu besar di layar
             pixmap = pixmap.scaled(800, 600, Qt.KeepAspectRatio)
             label.setPixmap(pixmap)
         else:
-            label.setText("Gambar tidak ditemukan")
+            label.setText(f"Gambar tidak ditemukan")
         layout.addWidget(label)
         self.setLayout(layout)
 
@@ -78,68 +86,45 @@ class CaptureIpCameraFramesWorker(QThread):
         self.frame_queue = frame_queue
         self.url = url
         self.__thread_active = True
-        self.__thread_pause = False
 
     def run(self) -> None:
-        # Support input berupa index kamera (0, 1) atau URL stream
-        video_source = self.url
-        if self.url.isdigit():
-            video_source = int(self.url)
-
+        video_source = int(self.url) if self.url.isdigit() else self.url
         cap = cv2.VideoCapture(video_source)
-        
         while self.__thread_active:
-            if not self.__thread_pause:
-                ret, frame = cap.read()
-                if ret:
-                    if not self.frame_queue.full():
-                        self.frame_queue.put(frame)
-                else:
-                    # Jika video file habis atau koneksi putus
-                    cap.release()
-                    time.sleep(1) # Tunggu sebentar sebelum reconnect
-                    cap = cv2.VideoCapture(video_source)
+            ret, frame = cap.read()
+            if ret:
+                if not self.frame_queue.full():
+                    self.frame_queue.put(frame)
             else:
-                time.sleep(0.1)
-        
+                cap.release()
+                time.sleep(2)
+                cap = cv2.VideoCapture(video_source)
         cap.release()
-        self.quit()
 
     def stop(self) -> None:
         self.__thread_active = False
 
-    def pause(self) -> None:
-        self.__thread_pause = True
-
-    def unpause(self) -> None:
-        self.__thread_pause = False
-
 class DisplayIpCameraFramesWorker(QThread):
     ImageUpdated = pyqtSignal(QImage)
-
     def __init__(self, frame_queue) -> None:
         super(DisplayIpCameraFramesWorker, self).__init__()
         self.frame_queue = frame_queue
         self.__thread_active = True
-        self.__thread_pause = False
 
     def run(self) -> None:
         while self.__thread_active:
             try:
                 frame = self.frame_queue.get(timeout=1)
-                height, width, channels = frame.shape
-                bytes_per_line = width * channels
                 cv_rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                qt_rgb_image = QImage(cv_rgb_image.data, width, height, bytes_per_line, QImage.Format_RGB888)
-                self.ImageUpdated.emit(qt_rgb_image)
-            except queue.Empty:
-                pass
+                h, w, ch = cv_rgb_image.shape
+                qt_image = QImage(cv_rgb_image.data, w, h, w * ch, QImage.Format_RGB888)
+                self.ImageUpdated.emit(qt_image)
+            except: continue
 
     def stop(self) -> None:
         self.__thread_active = False
 
 class InferenceFramesWorker(QThread):
-    # Sinyal dinamis: (Camera Index, Tipe Pelanggaran, Path Gambar)
     warningSignal = pyqtSignal(int, str, str) 
     result_ready = pyqtSignal(str, str, str, str)
 
@@ -148,76 +133,43 @@ class InferenceFramesWorker(QThread):
         self.input_queues = input_queues
         self.output_queues = output_queues
         self.num_cams = len(input_queues)
-        
-        # Tracking waktu terakhir foto diambil per kamera untuk mencegah spam
         self.last_capture_times = [0] * self.num_cams
         self.__thread_active = True
 
     def run(self) -> None:
-        current_cam_idx = 0
-        
+        curr = 0
         while self.__thread_active:
-            # Round-robin processing: Cek kamera 1, lalu 2, lalu 3, dst.
-            if not self.input_queues[current_cam_idx].empty():
-                frame = self.input_queues[current_cam_idx].get()
-                
-                if frame is None:
-                    continue
-
-                # Resize untuk performa (opsional, YOLO11 cukup cepat)
-                # resized_img = cv2.resize(frame, (640, 640)) 
-                
-                # --- INFERENCE YOLO11 ---
-                # conf=0.5 setara dengan model.conf = 0.5 di kode lama
-                results = model.predict(frame, conf=0.5, verbose=False) 
-                result = results[0] # Ambil hasil pertama
-                
-                # Render bounding box ke frame
+            if not self.input_queues[curr].empty():
+                frame = self.input_queues[curr].get()
+                results = model.predict(frame, conf=0.5, verbose=False, device='cpu') 
+                result = results[0]
                 annotated_frame = result.plot() 
                 
-                # Masukkan frame hasil deteksi ke queue display
-                if not self.output_queues[current_cam_idx].full():
-                    self.output_queues[current_cam_idx].put(annotated_frame)
+                if not self.output_queues[curr].full():
+                    self.output_queues[curr].put(annotated_frame)
                 
-                # --- LOGIC DETEKSI PELANGGARAN ---
-                # Cek cooldown waktu (30 detik per kamera)
-                if (time.time() - self.last_capture_times[current_cam_idx] >= 30):
+                if (time.time() - self.last_capture_times[curr] >= 30):
                     boxes = result.boxes
-                    violation_type = None
-                    
+                    v_type = None
                     for box in boxes:
-                        cls_id = int(box.cls[0]) # ID Class
+                        cls = int(box.cls[0])
+                        if cls == 1: v_type = "no-helmet"
+                        elif cls == 2: v_type = "no-vest"
                         
-                        # PERHATIAN: Sesuaikan ID ini dengan model training Anda
-                        # Asumsi kode lama: 1 = No Helm, 2 = No Vest
-                        if cls_id == 1: 
-                            violation_type = "tanpahelm"
-                        elif cls_id == 2:
-                            violation_type = "tanpavest"
-                        
-                        if violation_type:
-                            timestr = time.strftime("%m%d%H%M%S")
-                            tanggal = time.strftime("%Y-%m-%d")
-                            waktu = datetime.now().strftime("%H:%M:%S")
-                            lokasi = f"Camera {current_cam_idx + 1}"
-                            filename = f'{violation_type}_{lokasi.replace(" ", "")}_{timestr}.jpg'
-                            file_path = os.path.join(output_folder, filename)
-                            
-                            # Simpan Bukti
-                            cv2.imwrite(file_path, annotated_frame)
-                            
-                            # Emit Signal
-                            self.result_ready.emit(tanggal, waktu, lokasi, filename)
-                            self.warningSignal.emit(current_cam_idx + 1, violation_type, filename)
-                            
-                            # Update timer dan break loop box (satu foto cukup per frame)
-                            self.last_capture_times[current_cam_idx] = time.time()
+                        if v_type:
+                            ts = time.strftime("%m%d%H%M%S")
+                            tgl = time.strftime("%Y-%m-%d")
+                            wkt = datetime.now().strftime("%H:%M:%S")
+                            loc = f"Camera {curr + 1}"
+                            fname = f'{v_type}_{loc.replace(" ", "")}_{ts}.jpg'
+                            fpath = os.path.join(output_folder, fname)
+                            cv2.imwrite(fpath, annotated_frame)
+                            self.result_ready.emit(tgl, wkt, loc, fname)
+                            self.warningSignal.emit(curr + 1, v_type, fname)
+                            self.last_capture_times[curr] = time.time()
                             break 
 
-            # Pindah ke antrian kamera berikutnya
-            current_cam_idx = (current_cam_idx + 1) % self.num_cams
-            
-            # Sedikit sleep agar CPU tidak 100% jika queue kosong
+            curr = (curr + 1) % self.num_cams
             if all(q.empty() for q in self.input_queues):
                 time.sleep(0.01)
 
@@ -227,332 +179,151 @@ class InferenceFramesWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super(MainWindow, self).__init__()
+        self.camera_labels = []
+        self.scroll_areas = []
+        self.camera_states = []
+        self.camera_stats_labels = []
+        self.camera_stats_values = [0] * NUM_CAMERAS
 
-        # --- INIT UI COMPONENTS ---
-        self.btn_1 = QPushButton('Live Monitor', self)
-        self.btn_2 = QPushButton('Logging / Data', self)
-        self.btn_1.clicked.connect(self.button1)
-        self.btn_2.clicked.connect(self.button2)
+        self.init_ui_elements()
+        self.setup_threads()
+        self.initUI()
 
-        self.btn_ui2_1 = QPushButton('Filter', self)
-        self.btn_ui2_1.clicked.connect(self.updatetable)
+    def init_ui_elements(self):
+        self.btn_1 = QPushButton('Live Monitor')
+        self.btn_2 = QPushButton('Logging / Data')
+        self.btn_1.clicked.connect(lambda: self.right_widget.setCurrentIndex(0))
+        self.btn_2.clicked.connect(lambda: self.right_widget.setCurrentIndex(1))
 
-        self.dateeditstart = QDateEdit(calendarPopup=True)
-        self.dateeditend = QDateEdit(calendarPopup=True)
-        
         self.table_widget = QTableWidget()
         self.table_widget.setColumnCount(4)
         self.table_widget.setHorizontalHeaderLabels(['Tanggal', 'Waktu', 'Lokasi', 'Bukti'])
-        self.table_widget.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_widget.cellClicked.connect(self.show_image_table)
 
-        # Statistik Pelanggaran
         self.stats_layout = QVBoxLayout()
-        self.total_label = QLabel("Total Pelanggaran")
+        self.total_label = QLabel("Total Pelanggaran : 0")
         self.stats_layout.addWidget(self.total_label)
-        
-        self.camera_stats_labels = [] # List label statistik per kamera
-        self.camera_stats_values = [] # List value counter per kamera
-
-        # --- DYNAMIC CAMERA WIDGETS ---
-        self.camera_labels = []       # List objek QLabel
-        self.scroll_areas = []        # List objek QScrollArea
-        self.camera_states = []       # Status Normal/Maximized
 
         for i in range(NUM_CAMERAS):
-            # Label
-            cam_lbl = QLabel()
-            cam_lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
-            cam_lbl.setScaledContents(True)
-            cam_lbl.installEventFilter(self)
-            cam_lbl.setObjectName(f"Camera_{i}") # ID untuk event filter
-            self.camera_labels.append(cam_lbl)
+            lbl = QLabel("Menunggu Kamera...")
+            lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+            lbl.setScaledContents(True)
+            lbl.installEventFilter(self)
+            lbl.setObjectName(f"Camera_{i}")
+            self.camera_labels.append(lbl)
 
-            # Scroll Area
-            scroll = QScrollArea()
-            scroll.setBackgroundRole(QPalette.Dark)
-            scroll.setWidgetResizable(True)
-            scroll.setWidget(cam_lbl)
-            self.scroll_areas.append(scroll)
-            
-            # State
+            scr = QScrollArea()
+            scr.setWidgetResizable(True)
+            scr.setWidget(lbl)
+            self.scroll_areas.append(scr)
             self.camera_states.append("Normal")
 
-            # Stats Label
-            stat_lbl = QLabel(f"Camera {i+1} : 0")
-            self.camera_stats_labels.append(stat_lbl)
-            self.camera_stats_values.append(0)
-            self.stats_layout.addWidget(stat_lbl)
+            s_lbl = QLabel(f"Camera {i+1} : 0")
+            self.camera_stats_labels.append(s_lbl)
+            self.stats_layout.addWidget(s_lbl)
 
-        # --- THREADS SETUP ---
-        self.capture_workers = []
-        self.display_workers = []
-
-        # 1. Inference Worker (Satu worker handle semua kamera)
+    def setup_threads(self):
         self.inference_worker = InferenceFramesWorker(frame_queues, display_queues)
         self.inference_worker.warningSignal.connect(self.showWarningGeneric)
         self.inference_worker.result_ready.connect(self.insert_data)
         self.inference_worker.start()
 
-        # 2. Capture & Display Workers (Per Kamera)
+        self.cap_workers = []
+        self.disp_workers = []
         for i in range(NUM_CAMERAS):
-            # Capture
-            url = array_ip_cameras[i]
-            cap_worker = CaptureIpCameraFramesWorker(url, frame_queues[i])
-            cap_worker.start()
-            self.capture_workers.append(cap_worker)
+            cw = CaptureIpCameraFramesWorker(array_ip_cameras[i], frame_queues[i])
+            cw.start()
+            self.cap_workers.append(cw)
 
-            # Display
-            disp_worker = DisplayIpCameraFramesWorker(display_queues[i])
-            # Gunakan lambda dengan argumen default i=i untuk binding yang benar
-            disp_worker.ImageUpdated.connect(lambda image, idx=i: self.update_camera_frame(image, idx))
-            disp_worker.start()
-            self.display_workers.append(disp_worker)
-
-        # Tab Setup
-        self.tab1 = self.ui1()
-        self.tab2 = self.ui2()
-        self.initUI()
-
-    def update_camera_frame(self, image, index):
-        if index < len(self.camera_labels):
-            self.camera_labels[index].setPixmap(QPixmap.fromImage(image))
-
-    def button1(self):
-        self.right_widget.setCurrentIndex(0)
-
-    def button2(self):
-        self.right_widget.setCurrentIndex(1)
+            dw = DisplayIpCameraFramesWorker(display_queues[i])
+            dw.ImageUpdated.connect(lambda img, idx=i: self.camera_labels[idx].setPixmap(QPixmap.fromImage(img)))
+            dw.start()
+            self.disp_workers.append(dw)
 
     def initUI(self) -> None:
-        left_layout = QVBoxLayout()
-        left_layout.addWidget(self.btn_1)
-        left_layout.addWidget(self.btn_2)
-        left_layout.addStretch(100)
-        left_widget = QWidget()
-        left_widget.setLayout(left_layout)
-
+        left_w = QWidget()
+        l_lay = QVBoxLayout(); l_lay.addWidget(self.btn_1); l_lay.addWidget(self.btn_2); l_lay.addStretch()
+        left_w.setLayout(l_lay)
         self.right_widget = QTabWidget()
-        self.right_widget.addTab(self.tab1, '')
-        self.right_widget.addTab(self.tab2, '')
-        self.right_widget.setStyleSheet('''QTabBar::tab{width: 0; height: 0; margin: 0; padding: 0; border: none;}''')
+        self.right_widget.addTab(self.ui1(), ''); self.right_widget.addTab(self.ui2(), '')
+        self.right_widget.setStyleSheet("QTabBar::tab { width: 0; height: 0; }")
+        main_lay = QHBoxLayout(); main_lay.addWidget(left_w, 1); main_lay.addWidget(self.right_widget, 5)
+        c_widget = QWidget(); c_widget.setLayout(main_lay); self.setCentralWidget(c_widget)
+        self.setWindowTitle("PPE Monitoring System - YOLO11 Drive C Mode"); self.resize(1280, 720)
 
-        main_layout = QHBoxLayout()
-        main_layout.addWidget(left_widget)
-        main_layout.addWidget(self.right_widget)
-        
-        main_widget = QWidget()
-        main_widget.setLayout(main_layout)
-        self.setCentralWidget(main_widget)
-        self.setMinimumSize(1024, 768)
-        self.setWindowTitle("YOLO11 Multi-Camera System")
-
-    def ui1(self) -> None:
-        # Dynamic Grid Layout calculation
-        grid_layout = QGridLayout()
-        grid_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Hitung jumlah kolom dan baris optimal (seperti matrix)
-        cols = math.ceil(math.sqrt(NUM_CAMERAS))
-        
-        for i, scroll_area in enumerate(self.scroll_areas):
-            row = i // cols
-            col = i % cols
-            grid_layout.addWidget(scroll_area, row, col)
-            
-        self.main_tab1 = QWidget()
-        self.main_tab1.setLayout(grid_layout)
-        return self.main_tab1
+    def ui1(self):
+        w = QWidget(); lay = QGridLayout(); cols = math.ceil(math.sqrt(NUM_CAMERAS))
+        for i, s in enumerate(self.scroll_areas): lay.addWidget(s, i // cols, i % cols)
+        w.setLayout(lay); return w
 
     def ui2(self):
-        upper_layout = QHBoxLayout()
-        selected_date = QtCore.QDateTime(2023, 1, 1, 0, 0)
-        self.dateeditstart.setDateTime(selected_date)
-        self.dateeditend.setDateTime(QDateTime.currentDateTime())
-        
-        upper_layout.addWidget(self.dateeditstart)
-        upper_layout.addWidget(self.dateeditend)
-        upper_layout.addWidget(self.btn_ui2_1)
+        w = QWidget(); lay = QVBoxLayout(); h_lay = QHBoxLayout()
+        self.d_start = QDateEdit(calendarPopup=True); self.d_end = QDateEdit(calendarPopup=True)
+        self.d_start.setDate(date.today().replace(day=1)); self.d_end.setDate(date.today())
+        btn_f = QPushButton("Filter Data"); btn_f.clicked.connect(self.updatetable)
+        h_lay.addWidget(QLabel("Dari:")); h_lay.addWidget(self.d_start); h_lay.addWidget(QLabel("Sampai:")); h_lay.addWidget(self.d_end); h_lay.addWidget(btn_f)
+        lay.addLayout(h_lay); lay.addLayout(self.stats_layout); lay.addWidget(self.table_widget); w.setLayout(lay)
+        self.updatetable(); return w
 
-        main_layout = QVBoxLayout()
-        main_layout.addLayout(upper_layout)
-        
-        # Masukkan layout statistik yang sudah dibuat di init
-        container_stats = QWidget()
-        container_stats.setLayout(self.stats_layout)
-        main_layout.addWidget(container_stats)
-        
-        main_layout.addWidget(self.table_widget)
-        
-        self.table_widget.cellClicked.connect(self.show_image_table)
-        
-        main = QWidget()
-        main.setLayout(main_layout)
-        
-        # Load data awal
-        self.updatetable() 
-        return main
-
-    def show_image_table(self, row, column):
-        if column == 3:
-            image_path = self.table_widget.item(row, column).text()
-            image_viewer = ImageViewer(image_path)
-            image_viewer.exec_()
+    def insert_data(self, tgl, wkt, loc, bukti):
+        q = QSqlQuery()
+        q.prepare("INSERT INTO data (Tanggal, Waktu, Lokasi, Bukti) VALUES (?, ?, ?, ?)")
+        for val in [tgl, wkt, loc, bukti]: q.addBindValue(val)
+        if q.exec_(): self.updatetable()
 
     def updatetable(self):
-        self.reset_stats()
-        dtstart = self.dateeditstart.dateTime().toString("yyyy-MM-dd")
-        dtend = self.dateeditend.dateTime().toString("yyyy-MM-dd")
+        self.table_widget.setRowCount(0); t_start = self.d_start.date().toString("yyyy-MM-dd"); t_end = self.d_end.date().toString("yyyy-MM-dd")
+        q = QSqlQuery(); q.prepare("SELECT Tanggal, Waktu, Lokasi, Bukti FROM data WHERE Tanggal BETWEEN ? AND ?")
+        q.addBindValue(t_start); q.addBindValue(t_end)
+        row = 0; counts = [0] * NUM_CAMERAS
+        if q.exec_():
+            while q.next():
+                self.table_widget.insertRow(row)
+                for i in range(4): self.table_widget.setItem(row, i, QTableWidgetItem(str(q.value(i))))
+                try:
+                    c_idx = int(q.value(2).replace("Camera ", "")) - 1
+                    if 0 <= c_idx < NUM_CAMERAS: counts[c_idx] += 1
+                except: pass
+                row += 1
+        self.total_label.setText(f"Total Pelanggaran : {sum(counts)}")
+        for i in range(NUM_CAMERAS): self.camera_stats_labels[i].setText(f"Camera {i+1} : {counts[i]}")
 
-        data = self.fetch_datainrange(dtstart, dtend)
-        self.populate_table(data)
+    def show_image_table(self, r, c):
+        if c == 3: ImageViewer(self.table_widget.item(r, c).text()).exec_()
 
-    def reset_stats(self):
-        self.table_widget.setRowCount(0)
-        for i in range(NUM_CAMERAS):
-            self.camera_stats_values[i] = 0
-            self.camera_stats_labels[i].setText(f"Camera {i+1} : 0")
+    def showWarningGeneric(self, cam_id, v_type, img_p):
+        d = QDialog(self); d.setWindowTitle(f"⚠️ PELANGGARAN KAMERA {cam_id}"); l = QVBoxLayout()
+        img_l = QLabel(); pix = QPixmap(os.path.join(output_folder, img_p)).scaled(400, 300, Qt.KeepAspectRatio); img_l.setPixmap(pix)
+        txt = "TANPA HELM" if v_type == "tanpahelm" else "TANPA VEST"
+        msg = QLabel(f"TERDETEKSI {txt}!"); msg.setStyleSheet("color: red; font-size: 20px; font-weight: bold;")
+        l.addWidget(img_l); l.addWidget(msg); d.setLayout(l); d.show()
 
-    def populate_table(self, data):
-        self.table_widget.setRowCount(len(data))
-        
-        # Reset nilai sementara
-        temp_counts = [0] * len(self.camera_stats_values)
-        
-        for row, (tanggal, waktu, lokasi, bukti) in enumerate(data):
-            self.table_widget.setItem(row, 0, QTableWidgetItem(tanggal))
-            self.table_widget.setItem(row, 1, QTableWidgetItem(waktu))
-            self.table_widget.setItem(row, 2, QTableWidgetItem(lokasi))
-            self.table_widget.setItem(row, 3, QTableWidgetItem(bukti))
-            
-            # Hitung statistik dari data yang di-load
-            try:
-                cam_num = int(lokasi.replace("Camera ", ""))
-                if 0 < cam_num <= len(temp_counts):
-                    temp_counts[cam_num - 1] += 1
-            except:
-                pass
+    def eventFilter(self, source, event):
+        if event.type() == QEvent.MouseButtonDblClick and "Camera_" in source.objectName():
+            idx = int(source.objectName().split("_")[1])
+            if self.camera_states[idx] == "Normal":
+                for i, s in enumerate(self.scroll_areas): 
+                    if i != idx: s.hide()
+                self.camera_states[idx] = "Maximized"
+            else:
+                for s in self.scroll_areas: s.show()
+                self.camera_states[idx] = "Normal"
+            return True
+        return super().eventFilter(source, event)
 
-        # Terapkan hasil hitungan ke UI
-        self.camera_stats_values = temp_counts
-        total_all = 0
-        for i in range(len(self.camera_stats_values)):
-            count = self.camera_stats_values[i]
-            self.camera_stats_labels[i].setText(f"Camera {i+1} : {count}")
-            total_all += count
-            
-        # Update Label Total
-        self.total_label.setText(f"Total Pelanggaran : {total_all}")
-
-    def insert_data(self, tanggal, waktu, lokasi, bukti):
-        query = QSqlQuery()
-        query.prepare("INSERT INTO data (Tanggal, Waktu, Lokasi, Bukti) VALUES (?, ?, ?, ?)")
-        query.addBindValue(tanggal)
-        query.addBindValue(waktu)
-        query.addBindValue(lokasi)
-        query.addBindValue(bukti)
-        
-        if query.exec_():
-            # Refresh table jika sedang di tab logging (opsional)
-            if self.right_widget.currentIndex() == 1:
-                self.updatetable()
-
-    def fetch_datainrange(self, tgl_a, tgl_b):
-        query = QSqlQuery()
-        query.prepare("SELECT * FROM data WHERE Tanggal BETWEEN :a AND :b")
-        query.bindValue(":a", tgl_a)
-        query.bindValue(":b", tgl_b)
-        data = []
-        if query.exec_():
-            while query.next():
-                data.append((query.value(1), query.value(2), query.value(3), query.value(4)))
-        return list(reversed(data))
-
-    # --- EVENT HANDLING DINAMIS ---
-    def eventFilter(self, source: QObject, event: QEvent) -> bool:
-        if event.type() == QtCore.QEvent.MouseButtonDblClick:
-            obj_name = source.objectName() # Format "Camera_X"
-            if "Camera_" in obj_name:
-                idx = int(obj_name.split("_")[1])
-                
-                # Logic Maximize/Minimize
-                if self.camera_states[idx] == "Normal":
-                    # Sembunyikan semua KECUALI yang diklik
-                    for i, scroll in enumerate(self.scroll_areas):
-                        if i != idx:
-                            scroll.hide()
-                    self.camera_states[idx] = "Maximized"
-                else:
-                    # Tampilkan semua
-                    for scroll in self.scroll_areas:
-                        scroll.show()
-                    self.camera_states[idx] = "Normal"
-                return True
-        return super(MainWindow, self).eventFilter(source, event)
-
-    def showWarningGeneric(self, cam_id, type_violation, image_path):
-        # Dialog pop-up untuk peringatan
-        # Note: Jika terlalu sering pop-up bisa mengganggu, pertimbangkan logging saja
-        msg = QDialog(self)
-        msg.setWindowTitle(f"Peringatan Camera {cam_id}")
-        layout = QVBoxLayout()
-        
-        label_img = QLabel()
-        pix = QPixmap(f"foto/{image_path}")
-        if not pix.isNull():
-             pix = pix.scaled(400, 300, Qt.KeepAspectRatio)
-        label_img.setPixmap(pix)
-        
-        pesan = "Tidak memakai Helm" if type_violation == "tanpahelm" else "Tidak memakai Vest"
-        label_txt = QLabel(f"Terdeteksi {pesan} pada Camera {cam_id}")
-        label_txt.setStyleSheet("font-size: 16px; font-weight: bold; color: red;")
-        
-        layout.addWidget(label_img)
-        layout.addWidget(label_txt)
-        msg.setLayout(layout)
-        msg.open() # Gunakan open() agar non-blocking (asynchronous) dibanding exec_()
-
-    def closeEvent(self, event) -> None:
-        # Stop semua thread
+    def closeEvent(self, event):
         self.inference_worker.stop()
-        for w in self.capture_workers:
-            w.stop()
-        for w in self.display_workers:
-            w.stop()
+        for w in self.cap_workers + self.disp_workers: w.stop()
         event.accept()
 
-def main() -> None:
-    # 1. Inisialisasi Driver SQLITE
+def main():
     db = QSqlDatabase.addDatabase('QSQLITE')
-    db.setDatabaseName('logging.db') # Ini akan jadi nama file database Anda
-    
-    # 2. Buka Koneksi (Otomatis membuat file kosong jika belum ada)
-    if not db.open():
-        print("Error: Tidak dapat membuka/membuat file database")
-        return
-
-    # 3. [PENTING] Buat Tabel 'data' Secara Otomatis
-    # Kita cek dulu apakah tabel sudah ada, jika belum kita buat.
-    query = QSqlQuery()
-    create_table_sql = """
-    CREATE TABLE IF NOT EXISTS data (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        Tanggal TEXT,
-        Waktu TEXT,
-        Lokasi TEXT,
-        Bukti TEXT
-    )
-    """
-    
-    if query.exec_(create_table_sql):
-        print("Status Database: SUKSES (Tabel 'data' siap digunakan).")
-    else:
-        print(f"Status Database: ERROR ({query.lastError().text()})")
-
-    # 4. Jalankan Aplikasi Utama
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec_())
+    db.setDatabaseName(database_path)
+    if not db.open(): return
+    q = QSqlQuery()
+    q.exec_("CREATE TABLE IF NOT EXISTS data (id INTEGER PRIMARY KEY AUTOINCREMENT, Tanggal TEXT, Waktu TEXT, Lokasi TEXT, Bukti TEXT)")
+    app = QApplication(sys.argv); window = MainWindow(); window.show(); sys.exit(app.exec_())
 
 if __name__ == '__main__':
     main()
