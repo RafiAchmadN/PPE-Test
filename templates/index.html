@@ -161,12 +161,23 @@ input,select{font-family:var(--font);outline:none}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
       </button>
     </nav>
+    <div class="sidebar-bottom" style="display:flex;flex-direction:column;gap:4px;padding-bottom:8px">
+      <button class="nav-btn" onclick="openAddModal()" title="Tambah Kamera Baru" style="background:var(--accent);color:#fff">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+      <button class="nav-btn" onclick="logout()" title="Logout" style="color:var(--red)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      </button>
+    </div>
   </aside>
 
   <div class="main">
     <div class="topbar">
       <h1><span class="dot"></span> PPE Monitoring System</h1>
-      <span style="font-size:12px;color:var(--text-muted);font-family:var(--mono)" id="clock"></span>
+      <div style="display:flex;align-items:center;gap:20px">
+        <span id="serverAddr" style="font-size:11px;color:var(--text-muted);font-family:var(--mono);cursor:default" title="Alamat akses jaringan lokal"></span>
+        <span style="font-size:12px;color:var(--text-muted);font-family:var(--mono)" id="clock"></span>
+      </div>
     </div>
     <div class="content">
 
@@ -246,6 +257,26 @@ input,select{font-family:var(--font);outline:none}
 
         <button class="btn btn-primary" onclick="saveSettings()" style="margin-top:8px">Save Settings</button>
         <span id="settingsSaved" style="color:var(--green);font-size:13px;margin-left:12px;opacity:0;transition:opacity .3s">Saved!</span>
+
+        <div class="settings-card" style="margin-top:20px">
+          <h3>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+            Keamanan &amp; Akses
+          </h3>
+          <div style="font-size:12px;color:var(--text-dim);margin-bottom:16px;font-family:var(--mono)" id="serverAddrSettings"></div>
+          <div class="settings-row">
+            <div><div class="sl">Password Lama</div></div>
+            <input type="password" id="pw-current" placeholder="password saat ini" style="width:200px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 12px;color:var(--text);font-size:13px">
+          </div>
+          <div class="settings-row">
+            <div><div class="sl">Password Baru</div><div class="sd">Minimal 6 karakter</div></div>
+            <input type="password" id="pw-new" placeholder="password baru" style="width:200px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 12px;color:var(--text);font-size:13px">
+          </div>
+          <div style="margin-top:16px;display:flex;align-items:center;gap:12px">
+            <button class="btn btn-primary btn-sm" onclick="changePassword()">Ganti Password</button>
+            <span id="pwMsg" style="font-size:13px;opacity:0;transition:opacity .3s"></span>
+          </div>
+        </div>
       </div>
 
     </div>
@@ -259,7 +290,21 @@ input,select{font-family:var(--font);outline:none}
     <div class="modal-body">
       <input type="hidden" id="camEditId">
       <div class="form-group"><label>Camera Name</label><input type="text" id="camName" placeholder="e.g. Lobby Entrance"></div>
-      <div class="form-group"><label>Stream URL / Source</label><input type="text" id="camUrl" placeholder="rtsp://... or http://... or 0 for webcam"><div class="hint">Supports RTSP, HTTP MJPEG, YouTube, or numeric ID for local webcam</div></div>
+      <div class="form-group">
+        <label>IP Kamera (opsional — auto-isi URL RTSP)</label>
+        <input type="text" id="camIp" placeholder="192.168.1.x" oninput="onIpInput(this.value)">
+        <div class="hint">Masukkan IP untuk auto-isi URL, atau isi URL manual di bawah</div>
+      </div>
+      <div class="form-group">
+        <label>Stream URL / Source</label>
+        <input type="text" id="camUrl" placeholder="rtsp://user:pass@192.168.1.x:554/stream">
+        <div class="hint" style="margin-bottom:6px">RTSP, HTTP MJPEG, file video, atau angka (0 = webcam lokal)</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="fillRtsp('hikvision')">Hikvision</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="fillRtsp('dahua')">Dahua</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="fillRtsp('generic')">Generic</button>
+        </div>
+      </div>
       <div class="form-group"><label>Enabled</label><select id="camEnabled"><option value="1">Yes</option><option value="0">No</option></select></div>
     </div>
     <div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('camModal')">Cancel</button><button class="btn btn-primary" onclick="saveCam()">Save</button></div>
@@ -302,9 +347,20 @@ setInterval(()=>{document.getElementById('clock').textContent=new Date().toLocal
 async function api(p,o){
   try{
     const r=await fetch(p,o);
+    if(r.status===401){window.location.href='/login';return null;}
     if(!r.ok){console.error('API error',r.status,p);return null;}
     return await r.json();
   }catch(e){console.error('API fetch failed',p,e);return null;}
+}
+function logout(){if(confirm('Keluar dari sistem?'))window.location.href='/logout';}
+async function loadServerInfo(){
+  const d=await api('/api/info');
+  if(!d)return;
+  const txt=`${d.access_url}`;
+  const el=document.getElementById('serverAddr');
+  if(el)el.textContent='📡 '+txt;
+  const el2=document.getElementById('serverAddrSettings');
+  if(el2)el2.textContent='Akses jaringan: '+txt;
 }
 function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
 function today(){
@@ -377,12 +433,45 @@ async function loadCamTable(){
     </div></td>
   </tr>`).join('');
 }
+const RTSP_TEMPLATES={
+  hikvision:'rtsp://admin:password@{IP}:554/Streaming/Channels/101',
+  dahua:'rtsp://admin:password@{IP}:554/cam/realmonitor?channel=1&subtype=0',
+  generic:'rtsp://admin:password@{IP}:554/stream'
+};
+function onIpInput(ip){
+  if(!ip.trim())return;
+  const cur=document.getElementById('camUrl').value;
+  const tpl=Object.values(RTSP_TEMPLATES).find(t=>cur===t.replace('{IP}',_lastIp||''))||RTSP_TEMPLATES.generic;
+  _lastIp=ip.trim();
+  document.getElementById('camUrl').value=tpl.replace('{IP}',_lastIp);
+}
+let _lastIp='';
+function fillRtsp(brand){
+  const ip=document.getElementById('camIp').value.trim()||_lastIp||'192.168.1.x';
+  _lastIp=ip;
+  document.getElementById('camUrl').value=RTSP_TEMPLATES[brand].replace('{IP}',ip);
+}
+async function changePassword(){
+  const cur=document.getElementById('pw-current').value;
+  const nw=document.getElementById('pw-new').value;
+  const msg=document.getElementById('pwMsg');
+  const r=await fetch('/api/auth/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current:cur,new:nw})});
+  const d=await r.json();
+  msg.style.opacity='1';
+  if(r.ok){msg.style.color='var(--green)';msg.textContent='Password berhasil diubah!';}
+  else{msg.style.color='var(--red)';msg.textContent=d.error||'Gagal';}
+  setTimeout(()=>{msg.style.opacity='0';},3000);
+  document.getElementById('pw-current').value='';
+  document.getElementById('pw-new').value='';
+}
 function openAddModal(){
-  document.getElementById('camModalTitle').textContent='Add Camera';
+  document.getElementById('camModalTitle').textContent='Tambah Kamera';
   document.getElementById('camEditId').value='';
   document.getElementById('camName').value='';
+  document.getElementById('camIp').value='';
   document.getElementById('camUrl').value='';
   document.getElementById('camEnabled').value='1';
+  _lastIp='';
   document.getElementById('camModal').classList.add('show');
 }
 function openEditModal(id){
@@ -390,8 +479,10 @@ function openEditModal(id){
   document.getElementById('camModalTitle').textContent='Edit Camera';
   document.getElementById('camEditId').value=id;
   document.getElementById('camName').value=c.name;
+  document.getElementById('camIp').value='';
   document.getElementById('camUrl').value=c.url;
   document.getElementById('camEnabled').value=c.enabled;
+  _lastIp='';
   document.getElementById('camModal').classList.add('show');
 }
 function closeModal(id){document.getElementById(id).classList.remove('show')}
@@ -469,6 +560,7 @@ async function saveSettings(){
 // ─── INIT ────────────────────────────────────────────────────
 document.getElementById('logStart').value=fom();
 document.getElementById('logEnd').value=today();
+loadServerInfo();
 loadDashboard();
 setInterval(()=>{
   if(currentPage==='dashboard')loadDashboard();

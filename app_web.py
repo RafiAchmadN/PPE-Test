@@ -3,17 +3,21 @@ import sys
 import json
 import time
 import queue
+import socket
 import sqlite3
+import secrets
 import threading
 import traceback
 from datetime import datetime, date
+from functools import wraps
 from urllib.parse import urlparse
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 import cv2
 import numpy as np
-from flask import Flask, render_template, request, jsonify, Response, send_from_directory
+from flask import Flask, render_template, request, jsonify, Response, send_from_directory, session, redirect
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # --- Optional: dukungan DVR Xiongmai/Sofia (port 34567) ---
 try:
@@ -41,6 +45,27 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
+app.secret_key = os.environ.get('SECRET_KEY', 'ppe-monitor-default-change-me-2026')
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('logged_in'):
+            if request.path.startswith('/api/'):
+                return jsonify({'error': 'Unauthorized'}), 401
+            return redirect('/login')
+        return f(*args, **kwargs)
+    return decorated
+
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return '127.0.0.1'
 
 # Runtime settings (adjustable via UI)
 settings = {
@@ -123,6 +148,23 @@ def init_db():
         conn.execute("UPDATE data SET jenis='no-vest'   WHERE Bukti LIKE '%tanpavest%'")
         conn.commit()
         print("[MIGRATE] Done. Backfilled jenis from existing Bukti filenames.")
+
+    # Persistent secret key (survives restart)
+    row = conn.execute("SELECT value FROM app_settings WHERE key='secret_key'").fetchone()
+    if not row:
+        key = secrets.token_hex(32)
+        conn.execute("INSERT INTO app_settings (key,value) VALUES ('secret_key',?)", (key,))
+        conn.commit()
+        app.secret_key = key
+    else:
+        app.secret_key = row[0]
+
+    # Default admin password: admin123
+    row = conn.execute("SELECT value FROM app_settings WHERE key='admin_pw_hash'").fetchone()
+    if not row:
+        conn.execute("INSERT INTO app_settings (key,value) VALUES ('admin_pw_hash',?)",
+                     (generate_password_hash('admin123'),))
+        conn.commit()
 
     # Load saved settings
     for row in conn.execute("SELECT key, value FROM app_settings").fetchall():
@@ -638,16 +680,67 @@ def restart_camera(cid):
         cs.start()
 
 # ─── FLASK ROUTES ────────────────────────────────────────────────────────────
+
+# Auth routes (not protected)
+@app.route('/login', methods=['GET'])
+def login_page():
+    if session.get('logged_in'):
+        return redirect('/')
+    return render_template('login.html')
+
+@app.route('/login', methods=['POST'])
+def login_post():
+    d = request.json or {}
+    username = d.get('username', '').strip()
+    password = d.get('password', '')
+    if username != 'admin':
+        return jsonify({'error': 'Username atau password salah'}), 401
+    row = db_execute("SELECT value FROM app_settings WHERE key='admin_pw_hash'", fetchone=True)
+    if not row or not check_password_hash(row['value'], password):
+        return jsonify({'error': 'Username atau password salah'}), 401
+    session['logged_in'] = True
+    session.permanent = True
+    return jsonify({'ok': True})
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect('/login')
+
 @app.route('/')
+@login_required
 def index():
     return render_template('index.html')
 
 @app.route('/foto/<path:filename>')
+@login_required
 def serve_foto(filename):
     return send_from_directory(OUTPUT_FOLDER, filename)
 
+@app.route('/api/info')
+@login_required
+def api_info():
+    ip = get_local_ip()
+    return jsonify({'local_ip': ip, 'port': 5000, 'access_url': f'http://{ip}:5000'})
+
+@app.route('/api/auth/change-password', methods=['POST'])
+@login_required
+def change_password():
+    d = request.json or {}
+    current = d.get('current', '')
+    new_pw  = d.get('new', '')
+    row = db_execute("SELECT value FROM app_settings WHERE key='admin_pw_hash'", fetchone=True)
+    if not row or not check_password_hash(row['value'], current):
+        return jsonify({'error': 'Password lama salah'}), 401
+    if len(new_pw) < 6:
+        return jsonify({'error': 'Password baru minimal 6 karakter'}), 400
+    db_execute("INSERT OR REPLACE INTO app_settings (key,value) VALUES ('admin_pw_hash',?)",
+               (generate_password_hash(new_pw),))
+    return jsonify({'ok': True})
+
 # Camera CRUD
 @app.route('/api/cameras', methods=['GET'])
+@login_required
 def api_cameras_list():
     rows = db_execute("SELECT * FROM cameras ORDER BY id", fetch=True)
     for c in rows:
@@ -662,6 +755,7 @@ def api_cameras_list():
     return jsonify(rows)
 
 @app.route('/api/cameras', methods=['POST'])
+@login_required
 def api_cameras_create():
     d = request.json
     name = d.get('name','').strip(); url = d.get('url','').strip()
@@ -672,6 +766,7 @@ def api_cameras_create():
     return jsonify({'id': cid}), 201
 
 @app.route('/api/cameras/<int:cid>', methods=['PUT'])
+@login_required
 def api_cameras_update(cid):
     d = request.json
     name = d.get('name','').strip(); url = d.get('url','').strip(); enabled = d.get('enabled', 1)
@@ -682,6 +777,7 @@ def api_cameras_update(cid):
     return jsonify({'ok': True})
 
 @app.route('/api/cameras/<int:cid>', methods=['DELETE'])
+@login_required
 def api_cameras_delete(cid):
     stop_camera(cid)
     db_execute("DELETE FROM cameras WHERE id=?", (cid,))
@@ -689,6 +785,7 @@ def api_cameras_delete(cid):
 
 # ── Upload video lokal untuk testing PPE detection ─────────────────────
 @app.route('/api/videos', methods=['GET'])
+@login_required
 def api_videos_list():
     """List file video yang sudah di-upload — pakai path-nya sebagai URL kamera."""
     files = []
@@ -705,6 +802,7 @@ def api_videos_list():
 
 
 @app.route('/api/videos/upload', methods=['POST'])
+@login_required
 def api_videos_upload():
     """Upload satu file video. Response berisi path absolute yang bisa dipakai sebagai URL kamera."""
     if 'file' not in request.files:
@@ -735,6 +833,7 @@ def api_videos_upload():
 
 
 @app.route('/api/videos/<path:filename>', methods=['DELETE'])
+@login_required
 def api_videos_delete(filename):
     """Hapus file video upload."""
     safe = os.path.basename(filename)  # cegah path traversal
@@ -755,11 +854,13 @@ def gen_mjpeg(cid):
         time.sleep(1.0 / max(settings['stream_fps'], 1))
 
 @app.route('/api/stream/<int:cid>')
+@login_required
 def video_feed(cid):
     return Response(gen_mjpeg(cid), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 # Logs
 @app.route('/api/logs', methods=['GET'])
+@login_required
 def api_logs():
     s = request.args.get('start', date.today().replace(day=1).isoformat())
     e = request.args.get('end',   date.today().isoformat())
@@ -769,6 +870,7 @@ def api_logs():
     return jsonify(rows)
 
 @app.route('/api/stats', methods=['GET'])
+@login_required
 def api_stats():
     return jsonify({
         'total_violations': db_execute("SELECT COUNT(*) as c FROM data", fetchone=True)['c'],
@@ -780,10 +882,12 @@ def api_stats():
 
 # Settings
 @app.route('/api/settings', methods=['GET'])
+@login_required
 def api_settings_get():
     return jsonify(settings)
 
 @app.route('/api/settings', methods=['PUT'])
+@login_required
 def api_settings_update():
     d = request.json
     for k in ['violation_delay', 'confidence', 'person_confidence', 'stream_fps']:
@@ -805,12 +909,15 @@ if __name__ == '__main__':
     threading.Thread(target=load_model, daemon=True).start()
     threading.Thread(target=_violation_writer, daemon=True).start()
     start_all_cameras()
+    local_ip = get_local_ip()
     print("=" * 60)
     print("  PPE Monitoring System - Web UI")
+    print(f"  Local access    : http://localhost:5000")
+    print(f"  Network access  : http://{local_ip}:5000")
+    print(f"  Default login   : admin / admin123")
     print(f"  Violation delay : {settings['violation_delay']}s")
     print(f"  Confidence      : {settings['confidence']}")
     print(f"  Stream FPS cap  : {settings['stream_fps']}")
     print(f"  DVRIP support   : {'YES' if DVRIP_AVAILABLE else 'NO (install python-dvr + av)'}")
-    print("  Open http://localhost:5000")
     print("=" * 60)
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
