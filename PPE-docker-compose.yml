@@ -1,0 +1,17 @@
+services:
+  ppe-dashboard:
+    build: .
+    container_name: ppe-dashboard
+    restart: unless-stopped
+    volumes:
+      # Persist database dan foto hasil capture
+      - ./logging.db:/app/logging.db
+      - ./foto:/app/foto
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - web
+
+networks:
+  web:
+    external: true
