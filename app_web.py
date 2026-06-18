@@ -12,7 +12,7 @@ from datetime import datetime, date
 from functools import wraps
 from urllib.parse import urlparse
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+# GPU diaktifkan — hapus override CUDA_VISIBLE_DEVICES agar torch bisa detect GPU
 
 import cv2
 import numpy as np
@@ -185,6 +185,7 @@ _model = None
 _model_lock = threading.Lock()
 _model_type = None       # 'v5' or 'ultralytics'
 _model_names = {}
+_device = 'cpu'          # akan diupdate saat model load
 _inference_sem = threading.Semaphore(2)  # maks 2 kamera inference bersamaan
 
 def load_model():
@@ -204,12 +205,16 @@ def load_model():
 
         # 2. Jika file ada, langsung muat menggunakan ultralytics
         try:
+            import torch
             from ultralytics import YOLO
+            global _device
+            _device = 'cuda' if torch.cuda.is_available() else 'cpu'
             _model = YOLO(model_path)
-            _model.to('cpu')
+            _model.to(_device)
             _model_names = _model.names
             _model_type = 'ultralytics'
             print(f"[MODEL] Berhasil memuat {model_path}")
+            print(f"[MODEL] Device: {_device.upper()} {'(' + torch.cuda.get_device_name(0) + ')' if _device == 'cuda' else '(no GPU)'}")
             print(f"[MODEL] Classes: {_model_names}")
             return _model, _model_type
             
@@ -255,7 +260,7 @@ def run_inference(frame):
                     conf=min_conf,
                     imgsz=640,
                     verbose=False,
-                    device='cpu'
+                    device=_device
                 )
                 result = results[0]
                 names = _model_names or {}
