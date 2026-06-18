@@ -445,6 +445,9 @@ input,select{font-family:var(--font);outline:none}
 let cameras=[], currentPage='dashboard';
 const pages = ['dashboard','cameras','manage','logs','settings'];
 
+// Detect subpath prefix (e.g. /ppe) so API calls work behind a reverse proxy
+const _BASE = window.location.pathname === '/' ? '' : window.location.pathname.replace(/\/$/, '');
+
 function showPage(name){
   currentPage=name;
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
@@ -462,13 +465,13 @@ setInterval(()=>{document.getElementById('clock').textContent=new Date().toLocal
 
 async function api(p,o){
   try{
-    const r=await fetch(p,o);
-    if(r.status===401){window.location.href='/login';return null;}
+    const r=await fetch(_BASE+p,o);
+    if(r.status===401){window.location.href=_BASE+'/login';return null;}
     if(!r.ok){console.error('API error',r.status,p);return null;}
     return await r.json();
   }catch(e){console.error('API fetch failed',p,e);return null;}
 }
-function logout(){if(confirm('Keluar dari sistem?'))window.location.href='/logout';}
+function logout(){if(confirm('Keluar dari sistem?'))window.location.href=_BASE+'/logout';}
 async function loadServerInfo(){
   const d=await api('/api/info');
   if(!d)return;
@@ -518,7 +521,7 @@ async function renderCameraGrid(){
         </div>
       </div>
       <div class="cam-feed">
-        ${c.online?`<img src="/api/stream/${c.id}" alt="${esc(c.name)}">`:`<div class="no-signal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>${esc(c.error||'No Signal')}</div>`}
+        ${c.online?`<img src="${_BASE}/api/stream/${c.id}" alt="${esc(c.name)}">`:`<div class="no-signal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>${esc(c.error||'No Signal')}</div>`}
       </div>
       <div class="cam-meta"><span>FPS: ${c.fps||0}</span></div>
     </div>`).join('');
@@ -571,7 +574,7 @@ async function changePassword(){
   const cur=document.getElementById('pw-current').value;
   const nw=document.getElementById('pw-new').value;
   const msg=document.getElementById('pwMsg');
-  const r=await fetch('/api/auth/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current:cur,new:nw})});
+  const r=await fetch(_BASE+'/api/auth/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current:cur,new:nw})});
   const d=await r.json();
   msg.style.opacity='1';
   if(r.ok){msg.style.color='var(--green)';msg.textContent='Password berhasil diubah!';}
@@ -606,13 +609,13 @@ async function saveCam(){
   const id=document.getElementById('camEditId').value;
   const body=JSON.stringify({name:document.getElementById('camName').value,url:document.getElementById('camUrl').value,enabled:parseInt(document.getElementById('camEnabled').value)});
   const h={'Content-Type':'application/json'};
-  if(id)await fetch('/api/cameras/'+id,{method:'PUT',headers:h,body});
-  else await fetch('/api/cameras',{method:'POST',headers:h,body});
+  if(id)await fetch(_BASE+'/api/cameras/'+id,{method:'PUT',headers:h,body});
+  else await fetch(_BASE+'/api/cameras',{method:'POST',headers:h,body});
   closeModal('camModal');loadCamTable();
 }
 async function deleteCam(id,name){
   if(!confirm(`Delete camera "${name}"?`))return;
-  await fetch('/api/cameras/'+id,{method:'DELETE'});
+  await fetch(_BASE+'/api/cameras/'+id,{method:'DELETE'});
   loadCamTable();
 }
 
@@ -643,7 +646,7 @@ function showEvidence(f){
   const notFound=document.getElementById('imgNotFound');
   img.style.display='block';
   notFound.style.display='none';
-  img.src='/foto/'+f;
+  img.src=_BASE+'/foto/'+f;
   document.getElementById('imgModal').classList.add('show');
 }
 
@@ -669,7 +672,7 @@ async function saveSettings(){
     stream_fps:parseInt(document.getElementById('set-fps').value),
     inference_enabled:document.getElementById('set-inference').classList.contains('on')
   });
-  await fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body});
+  await fetch(_BASE+'/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body});
   const el=document.getElementById('settingsSaved');el.style.opacity='1';setTimeout(()=>el.style.opacity='0',2000);
 }
 
