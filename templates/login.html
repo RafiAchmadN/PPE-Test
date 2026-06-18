@@ -55,13 +55,14 @@ h1{font-size:22px;font-weight:700;text-align:center;margin-bottom:4px}
 </div>
 
 <script>
+const _BASE = "{{ app_base }}";
 async function doLogin(e){
   e.preventDefault();
   const btn=document.getElementById('loginBtn');
   const err=document.getElementById('errMsg');
   btn.disabled=true;btn.textContent='Memuat...';err.textContent='';
   try{
-    const r=await fetch('/login',{
+    const r=await fetch(_BASE+'/login',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
@@ -70,7 +71,7 @@ async function doLogin(e){
       })
     });
     const d=await r.json();
-    if(r.ok){window.location.href='/';}
+    if(r.ok){window.location.href=_BASE+'/';}
     else{err.textContent=d.error||'Login gagal';}
   }catch(ex){err.textContent='Tidak dapat terhubung ke server.';}
   finally{btn.disabled=false;btn.textContent='Masuk';}

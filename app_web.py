@@ -36,6 +36,7 @@ DVRIP_AVAILABLE = _DVRIP_LIB_OK and _AV_LIB_OK
 
 # --- CONFIG ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_BASE_URL = os.environ.get('APP_BASE_URL', '').rstrip('/')
 DATABASE_PATH = os.path.join(BASE_DIR, 'logging.db')
 OUTPUT_FOLDER = os.path.join(BASE_DIR, 'data', 'violations')
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'data', 'videos')
@@ -53,7 +54,7 @@ def login_required(f):
         if not session.get('logged_in'):
             if request.path.startswith('/api/'):
                 return jsonify({'error': 'Unauthorized'}), 401
-            return redirect('/login')
+            return redirect(APP_BASE_URL + '/login')
         return f(*args, **kwargs)
     return decorated
 
@@ -690,8 +691,8 @@ def restart_camera(cid):
 @app.route('/login', methods=['GET'])
 def login_page():
     if session.get('logged_in'):
-        return redirect('/')
-    return render_template('login.html')
+        return redirect(APP_BASE_URL + '/')
+    return render_template('login.html', app_base=APP_BASE_URL)
 
 @app.route('/login', methods=['POST'])
 def login_post():
@@ -710,7 +711,7 @@ def login_post():
 @app.route('/logout')
 def logout():
     session.clear()
-    return redirect('/login')
+    return redirect(APP_BASE_URL + '/login')
 
 @app.route('/')
 @login_required
