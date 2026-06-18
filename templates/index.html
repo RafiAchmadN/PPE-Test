@@ -121,6 +121,28 @@ input,select{font-family:var(--font);outline:none}
 .form-group .hint{font-size:11px;color:var(--text-muted);margin-top:4px}
 .modal-footer{display:flex;justify-content:flex-end;gap:10px;padding:16px 24px;border-top:1px solid var(--border)}
 
+/* ─── TUTORIAL CARD ────────────────────────────────────────── */
+.tutorial-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px;overflow:hidden}
+.tutorial-toggle{width:100%;display:flex;align-items:center;justify-content:space-between;padding:14px 20px;background:transparent;color:var(--text);font-size:14px;font-weight:600;border:none;cursor:pointer;font-family:var(--font)}
+.tutorial-toggle:hover{background:var(--bg-card2)}
+.tutorial-toggle .tc-icon{display:flex;align-items:center;gap:10px}
+.tutorial-toggle .tc-icon svg{color:var(--accent)}
+.tutorial-arrow{transition:transform .25s;color:var(--text-muted)}
+.tutorial-body{display:none;padding:0 20px 20px}
+.tutorial-body.open{display:block}
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}
+.step{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;display:flex;flex-direction:column;gap:8px}
+.step-num{width:26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.step-title{font-size:13px;font-weight:600}
+.step-desc{font-size:12px;color:var(--text-dim);line-height:1.5}
+.url-table{width:100%;border-collapse:collapse;font-size:12px}
+.url-table th{text-align:left;color:var(--text-dim);padding:8px 10px;border-bottom:1px solid var(--border);font-weight:600;text-transform:uppercase;letter-spacing:.4px;font-size:11px}
+.url-table td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+.url-table tr:last-child td{border-bottom:none}
+.url-table tr:hover td{background:var(--bg-card2)}
+.url-code{font-family:var(--mono);background:var(--bg);padding:3px 7px;border-radius:4px;color:var(--accent-light);font-size:11px;display:inline-block;word-break:break-all}
+.tip-box{background:var(--amber-dim);border:1px solid var(--amber);border-radius:var(--radius-sm);padding:10px 14px;font-size:12px;color:var(--amber);margin-top:14px;display:flex;gap:8px;align-items:flex-start}
+
 /* ─── SETTINGS ─────────────────────────────────────────────── */
 .settings-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:16px}
 .settings-card h3{font-size:14px;font-weight:600;margin-bottom:16px;display:flex;align-items:center;gap:8px}
@@ -207,6 +229,93 @@ input,select{font-family:var(--font);outline:none}
             Add Camera
           </button>
         </div>
+
+        <!-- Tutorial Card -->
+        <div class="tutorial-card">
+          <button class="tutorial-toggle" onclick="toggleTutorial()">
+            <span class="tc-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              Cara Menambahkan Kamera
+            </span>
+            <svg class="tutorial-arrow" id="tutorialArrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+          <div class="tutorial-body" id="tutorialBody">
+
+            <!-- Steps -->
+            <div class="steps">
+              <div class="step">
+                <div class="step-num">1</div>
+                <div class="step-title">Klik "Add Camera"</div>
+                <div class="step-desc">Klik tombol biru <b>Add Camera</b> di pojok kanan atas, atau tombol <b>+</b> di sidebar kiri bawah.</div>
+              </div>
+              <div class="step">
+                <div class="step-num">2</div>
+                <div class="step-title">Isi Nama Kamera</div>
+                <div class="step-desc">Masukkan nama lokasi kamera, misal <b>Area Produksi</b> atau <b>Pintu Masuk Gudang</b>.</div>
+              </div>
+              <div class="step">
+                <div class="step-num">3</div>
+                <div class="step-title">Masukkan IP atau URL</div>
+                <div class="step-desc">Ketik IP kamera di kolom IP, lalu pilih brand (Hikvision/Dahua) agar URL RTSP terisi otomatis. Ganti <b>password</b> sesuai kamera.</div>
+              </div>
+              <div class="step">
+                <div class="step-num">4</div>
+                <div class="step-title">Simpan &amp; Monitor</div>
+                <div class="step-desc">Klik <b>Save</b>. Kamera langsung mulai streaming dan deteksi APD berjalan otomatis.</div>
+              </div>
+            </div>
+
+            <!-- URL Reference Table -->
+            <div style="font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text-dim)">Format URL yang Didukung</div>
+            <table class="url-table">
+              <thead><tr><th>Tipe Kamera</th><th>Format URL</th><th>Keterangan</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td style="font-weight:600;white-space:nowrap">Hikvision (RTSP)</td>
+                  <td><span class="url-code">rtsp://admin:password@192.168.1.x:554/Streaming/Channels/101</span></td>
+                  <td style="color:var(--text-dim)">Channel 101 = stream utama kamera 1. Ganti 201 untuk kamera 2.</td>
+                </tr>
+                <tr>
+                  <td style="font-weight:600;white-space:nowrap">Dahua (RTSP)</td>
+                  <td><span class="url-code">rtsp://admin:password@192.168.1.x:554/cam/realmonitor?channel=1&subtype=0</span></td>
+                  <td style="color:var(--text-dim)">subtype=0 = main stream (HD), subtype=1 = sub stream (ringan).</td>
+                </tr>
+                <tr>
+                  <td style="font-weight:600;white-space:nowrap">Generic RTSP</td>
+                  <td><span class="url-code">rtsp://admin:password@192.168.1.x:554/stream</span></td>
+                  <td style="color:var(--text-dim)">Untuk kamera IP generik. Path /stream bisa berbeda per merk.</td>
+                </tr>
+                <tr>
+                  <td style="font-weight:600;white-space:nowrap">HTTP MJPEG</td>
+                  <td><span class="url-code">http://192.168.1.x:8080/video</span></td>
+                  <td style="color:var(--text-dim)">Untuk kamera IP yang menggunakan MJPEG over HTTP.</td>
+                </tr>
+                <tr>
+                  <td style="font-weight:600;white-space:nowrap">DVR Xiongmai</td>
+                  <td><span class="url-code">dvrip://admin:password@192.168.1.x:34567/0</span></td>
+                  <td style="color:var(--text-dim)">Angka di akhir = nomor channel (0 = kamera 1, 1 = kamera 2).</td>
+                </tr>
+                <tr>
+                  <td style="font-weight:600;white-space:nowrap">File Video</td>
+                  <td><span class="url-code">/path/ke/file/video.mp4</span></td>
+                  <td style="color:var(--text-dim)">Untuk testing. Format: .mp4 .avi .mov .mkv. Video diulang terus.</td>
+                </tr>
+                <tr>
+                  <td style="font-weight:600;white-space:nowrap">Webcam Lokal</td>
+                  <td><span class="url-code">0</span></td>
+                  <td style="color:var(--text-dim)">Angka 0 = webcam pertama di server. 1 = webcam kedua, dst.</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="tip-box">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              <span><b>Tips:</b> Jika kamera berstatus <b>Offline</b> setelah ditambah, periksa: (1) IP kamera dapat di-ping dari server, (2) username &amp; password benar, (3) port 554 tidak diblokir firewall. Coba ganti path stream jika gagal (misal /stream1, /live, /h264).</span>
+            </div>
+
+          </div>
+        </div>
+
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
           <table class="tbl" id="camTable"><thead><tr><th>#</th><th>Name</th><th>URL / Source</th><th>Status</th><th>FPS</th><th>Actions</th></tr></thead><tbody></tbody></table>
         </div>
@@ -299,10 +408,17 @@ input,select{font-family:var(--font);outline:none}
         <label>Stream URL / Source</label>
         <input type="text" id="camUrl" placeholder="rtsp://user:pass@192.168.1.x:554/stream">
         <div class="hint" style="margin-bottom:6px">RTSP, HTTP MJPEG, file video, atau angka (0 = webcam lokal)</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
           <button type="button" class="btn btn-ghost btn-sm" onclick="fillRtsp('hikvision')">Hikvision</button>
           <button type="button" class="btn btn-ghost btn-sm" onclick="fillRtsp('dahua')">Dahua</button>
           <button type="button" class="btn btn-ghost btn-sm" onclick="fillRtsp('generic')">Generic</button>
+        </div>
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:11px;color:var(--text-dim);line-height:1.8">
+          <div style="font-weight:600;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px;font-size:10px">Contoh URL</div>
+          <div><span style="color:var(--text-muted);width:90px;display:inline-block">Hikvision</span><span style="font-family:var(--mono);color:var(--accent-light)">rtsp://admin:pass@192.168.1.x:554/Streaming/Channels/101</span></div>
+          <div><span style="color:var(--text-muted);width:90px;display:inline-block">Dahua</span><span style="font-family:var(--mono);color:var(--accent-light)">rtsp://admin:pass@192.168.1.x:554/cam/realmonitor?channel=1&amp;subtype=0</span></div>
+          <div><span style="color:var(--text-muted);width:90px;display:inline-block">DVR Xiongmai</span><span style="font-family:var(--mono);color:var(--accent-light)">dvrip://admin:pass@192.168.1.x:34567/0</span></div>
+          <div><span style="color:var(--text-muted);width:90px;display:inline-block">Webcam lokal</span><span style="font-family:var(--mono);color:var(--accent-light)">0</span></div>
         </div>
       </div>
       <div class="form-group"><label>Enabled</label><select id="camEnabled"><option value="1">Yes</option><option value="0">No</option></select></div>
@@ -555,6 +671,14 @@ async function saveSettings(){
   });
   await fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body});
   const el=document.getElementById('settingsSaved');el.style.opacity='1';setTimeout(()=>el.style.opacity='0',2000);
+}
+
+// ─── TUTORIAL ────────────────────────────────────────────────
+function toggleTutorial(){
+  const body=document.getElementById('tutorialBody');
+  const arrow=document.getElementById('tutorialArrow');
+  const open=body.classList.toggle('open');
+  arrow.style.transform=open?'rotate(180deg)':'rotate(0deg)';
 }
 
 // ─── INIT ────────────────────────────────────────────────────
