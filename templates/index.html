@@ -224,10 +224,16 @@ input,select{font-family:var(--font);outline:none}
       <div class="page" id="page-manage">
         <div class="section-title">
           <h2>Camera Management</h2>
-          <button class="btn btn-primary" onclick="openAddModal()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Add Camera
-          </button>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost" onclick="openUploadModal()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/></svg>
+              Upload Video
+            </button>
+            <button class="btn btn-primary" onclick="openAddModal()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Add Camera
+            </button>
+          </div>
         </div>
 
         <!-- Tutorial Card -->
@@ -424,6 +430,41 @@ input,select{font-family:var(--font);outline:none}
       <div class="form-group"><label>Enabled</label><select id="camEnabled"><option value="1">Yes</option><option value="0">No</option></select></div>
     </div>
     <div class="modal-footer"><button class="btn btn-ghost" onclick="closeModal('camModal')">Cancel</button><button class="btn btn-primary" onclick="saveCam()">Save</button></div>
+  </div>
+</div>
+
+<!-- ─── UPLOAD VIDEO MODAL ───────────────────────────────────── -->
+<div class="modal-overlay" id="uploadModal">
+  <div class="modal" style="width:520px">
+    <div class="modal-header">
+      <h2>Upload Video untuk Testing</h2>
+      <button class="modal-close" onclick="closeModal('uploadModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div style="background:var(--bg);border:2px dashed var(--border);border-radius:var(--radius);padding:32px;text-align:center;cursor:pointer;transition:border .2s" id="dropZone" onclick="document.getElementById('videoFileInput').click()">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" style="margin-bottom:12px"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3"/></svg>
+        <div style="font-size:14px;color:var(--text-dim);margin-bottom:4px">Klik atau drag &amp; drop file video</div>
+        <div style="font-size:11px;color:var(--text-muted)">Format: .mp4 .avi .mov .mkv .webm — Maks 2GB</div>
+        <input type="file" id="videoFileInput" accept=".mp4,.avi,.mov,.mkv,.webm,.m4v" style="display:none" onchange="onVideoSelected(this)">
+      </div>
+      <div id="uploadStatus" style="display:none;margin-top:16px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:13px">
+          <span id="uploadFileName" style="color:var(--text-dim)"></span>
+          <span id="uploadPct" style="font-family:var(--mono);color:var(--accent)">0%</span>
+        </div>
+        <div style="background:var(--bg);border-radius:4px;height:6px;overflow:hidden">
+          <div id="uploadBar" style="height:100%;background:var(--accent);width:0%;transition:width .2s;border-radius:4px"></div>
+        </div>
+      </div>
+      <div id="uploadResult" style="display:none;margin-top:16px;background:var(--green-dim);border:1px solid var(--green);border-radius:var(--radius-sm);padding:12px">
+        <div style="font-size:12px;color:var(--green);margin-bottom:6px;font-weight:600">Upload berhasil! Salin path berikut sebagai URL kamera:</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <code id="uploadedPath" style="font-size:12px;color:var(--accent-light);background:var(--bg);padding:6px 10px;border-radius:4px;flex:1;word-break:break-all;font-family:var(--mono)"></code>
+          <button class="btn btn-ghost btn-sm" onclick="copyUploadedPath()">Salin</button>
+        </div>
+        <button class="btn btn-primary btn-sm" style="margin-top:10px;width:100%" onclick="useUploadedVideo()">+ Tambah sebagai Kamera Baru</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -674,6 +715,94 @@ async function saveSettings(){
   });
   await fetch(_BASE+'/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body});
   const el=document.getElementById('settingsSaved');el.style.opacity='1';setTimeout(()=>el.style.opacity='0',2000);
+}
+
+// ─── VIDEO UPLOAD ────────────────────────────────────────────
+let _uploadedPath = '';
+
+function openUploadModal(){
+  document.getElementById('uploadStatus').style.display='none';
+  document.getElementById('uploadResult').style.display='none';
+  document.getElementById('videoFileInput').value='';
+  document.getElementById('uploadModal').classList.add('show');
+}
+
+function onVideoSelected(input){
+  const file = input.files[0];
+  if(!file) return;
+  uploadVideo(file);
+}
+
+// Drag & drop support
+document.addEventListener('DOMContentLoaded', () => {
+  const zone = document.getElementById('dropZone');
+  if(!zone) return;
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.style.borderColor='var(--accent)'; });
+  zone.addEventListener('dragleave', () => { zone.style.borderColor='var(--border)'; });
+  zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.style.borderColor='var(--border)';
+    const file = e.dataTransfer.files[0];
+    if(file) uploadVideo(file);
+  });
+});
+
+function uploadVideo(file){
+  const status = document.getElementById('uploadStatus');
+  const result = document.getElementById('uploadResult');
+  const bar    = document.getElementById('uploadBar');
+  const pct    = document.getElementById('uploadPct');
+  const fname  = document.getElementById('uploadFileName');
+
+  status.style.display='block';
+  result.style.display='none';
+  fname.textContent = file.name;
+  bar.style.width='0%';
+  pct.textContent='0%';
+
+  const form = new FormData();
+  form.append('file', file);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', _BASE + '/api/videos/upload');
+
+  xhr.upload.onprogress = e => {
+    if(e.lengthComputable){
+      const p = Math.round(e.loaded/e.total*100);
+      bar.style.width = p+'%';
+      pct.textContent = p+'%';
+    }
+  };
+
+  xhr.onload = () => {
+    if(xhr.status === 201){
+      const d = JSON.parse(xhr.responseText);
+      _uploadedPath = d.path;
+      document.getElementById('uploadedPath').textContent = d.path;
+      result.style.display='block';
+      pct.textContent='100%';
+    } else {
+      pct.textContent='Gagal';
+      pct.style.color='var(--red)';
+    }
+  };
+  xhr.onerror = () => { pct.textContent='Error jaringan'; pct.style.color='var(--red)'; };
+  xhr.send(form);
+}
+
+function copyUploadedPath(){
+  navigator.clipboard.writeText(_uploadedPath);
+}
+
+function useUploadedVideo(){
+  closeModal('uploadModal');
+  document.getElementById('camModalTitle').textContent='Tambah Kamera';
+  document.getElementById('camEditId').value='';
+  document.getElementById('camName').value='Video Test';
+  document.getElementById('camIp').value='';
+  document.getElementById('camUrl').value=_uploadedPath;
+  document.getElementById('camEnabled').value='1';
+  document.getElementById('camModal').classList.add('show');
 }
 
 // ─── TUTORIAL ────────────────────────────────────────────────
