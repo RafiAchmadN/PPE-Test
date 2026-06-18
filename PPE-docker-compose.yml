@@ -1,15 +1,25 @@
 services:
   ppe-dashboard:
-    build: .
+    build:
+      context: .
+      dockerfile: PPE-Dockerfile
     container_name: ppe-dashboard
     restart: unless-stopped
     volumes:
-      # Persist database dan foto hasil capture
       - ./logging.db:/app/logging.db
       - ./foto:/app/foto
     environment:
       - PYTHONUNBUFFERED=1
       - APP_BASE_URL=/ppe
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     networks:
       - web
 

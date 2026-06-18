@@ -1,7 +1,12 @@
-FROM python:3.11-slim
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
 
-# Install system dependencies untuk OpenCV
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python 3.11 + system dependencies untuk OpenCV
 RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-dev \
+    python3-pip \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
@@ -10,12 +15,17 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 && \
+    ln -sf /usr/bin/python3 /usr/bin/python
+
 WORKDIR /app
 
-# Copy requirements dulu (cache layer)
-COPY requirements.txt .
+# Install PyTorch dengan CUDA 12.1 terlebih dahulu
+RUN pip install --no-cache-dir \
+    torch torchvision \
+    --index-url https://download.pytorch.org/whl/cu121
 
-# Install Python dependencies (tanpa CUDA/GPU karena CPU only di server)
+# Install dependensi aplikasi
 RUN pip install --no-cache-dir \
     flask==3.1.3 \
     opencv-python-headless==4.13.0.92 \
@@ -29,8 +39,7 @@ RUN pip install --no-cache-dir \
 # Copy semua file app
 COPY . .
 
-# Buat folder foto untuk menyimpan hasil capture
-RUN mkdir -p foto
+RUN mkdir -p foto data/violations data/videos
 
 EXPOSE 5000
 
