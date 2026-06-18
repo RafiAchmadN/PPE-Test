@@ -445,8 +445,8 @@ input,select{font-family:var(--font);outline:none}
 let cameras=[], currentPage='dashboard';
 const pages = ['dashboard','cameras','manage','logs','settings'];
 
-// Detect subpath prefix (e.g. /ppe) so API calls work behind a reverse proxy
-const _BASE = window.location.pathname === '/' ? '' : window.location.pathname.replace(/\/$/, '');
+// Base URL injected by Flask from APP_BASE_URL env var (e.g. /ppe)
+const _BASE = "{{ app_base }}";
 
 function showPage(name){
   currentPage=name;

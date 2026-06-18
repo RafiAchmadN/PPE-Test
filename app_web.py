@@ -710,7 +710,8 @@ def logout():
 @app.route('/')
 @login_required
 def index():
-    return render_template('index.html')
+    base = os.environ.get('APP_BASE_URL', '').rstrip('/')
+    return render_template('index.html', app_base=base)
 
 @app.route('/foto/<path:filename>')
 @login_required

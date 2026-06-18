@@ -9,6 +9,7 @@ services:
       - ./foto:/app/foto
     environment:
       - PYTHONUNBUFFERED=1
+      - APP_BASE_URL=/ppe
     networks:
       - web
 
