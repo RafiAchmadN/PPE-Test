@@ -74,7 +74,7 @@ settings = {
     'confidence': 0.5,          # threshold untuk PPE class (helmet, rompi, dll)
     'person_confidence': 0.7,   # threshold khusus class Person (lebih tinggi = kurangi false detect)
     'inference_enabled': True,
-    'stream_fps': 15,            # max fps for MJPEG stream
+    'stream_fps': 5,             # max fps for MJPEG stream
 }
 
 # ─── DATABASE ────────────────────────────────────────────────────────────────
@@ -685,7 +685,11 @@ class CameraStream:
     def get_jpeg(self):
         with self.lock:
             if self.frame is not None:
-                _, buf = cv2.imencode('.jpg', self.frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                frame = self.frame
+                h, w = frame.shape[:2]
+                if w > 640:
+                    frame = cv2.resize(frame, (640, int(h * 640 / w)))
+                _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
                 return buf.tobytes()
         return None
 
