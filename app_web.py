@@ -246,6 +246,7 @@ def _classify(cls_id, cls_name):
  
 def run_inference(frame):
     """Returns (annotated_frame, violations_list)."""
+    global _device
     model, mtype = load_model()
     if model is None:
         return frame, []
@@ -266,7 +267,6 @@ def run_inference(frame):
                     )
                 except RuntimeError as cuda_err:
                     if 'no kernel image' in str(cuda_err).lower() or 'cudaerror' in str(cuda_err).lower():
-                        global _device
                         print(f"[MODEL] CUDA kernel error, fallback ke CPU: {cuda_err}")
                         _device = 'cpu'
                         model.to('cpu')
