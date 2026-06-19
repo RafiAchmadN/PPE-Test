@@ -368,6 +368,27 @@ class CameraStream:
             except Exception as e:
                 return None, f"YouTube error: {str(e)[:80]}"
 
+        # Konversi path Windows (C:\...) ke path container Linux
+        import re
+        if re.match(r'^[A-Za-z]:[\\\/]', url):
+            unix = url.replace('\\', '/')
+            # Cari bagian relatif setelah marker folder yang dikenal
+            for marker in ['data/videos/', 'data/violations/', 'data/']:
+                idx = unix.lower().find(marker)
+                if idx >= 0:
+                    rel = unix[idx:]
+                    candidate = os.path.join(BASE_DIR, rel)
+                    if os.path.isfile(candidate):
+                        print(f"[CAM] Windows path dikonversi -> {candidate}")
+                        return candidate, None
+            # Fallback: cari berdasarkan nama file saja di data/videos/
+            fname = os.path.basename(unix)
+            candidate = os.path.join(BASE_DIR, 'data', 'videos', fname)
+            if os.path.isfile(candidate):
+                print(f"[CAM] Windows path (filename only) -> {candidate}")
+                return candidate, None
+            return None, f"File tidak ditemukan di container. Gunakan path: /app/data/videos/{os.path.basename(unix)}"
+
         # Cek apakah path lokal (relatif maupun absolut)
         if not url.lower().startswith(("http://", "https://", "rtsp://", "rtmp://", "mms://", "dvrip://")):
             # Coba path absolut dulu
