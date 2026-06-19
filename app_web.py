@@ -256,13 +256,23 @@ def run_inference(frame):
             if mtype == 'ultralytics':
                 import torch
                 min_conf = min(settings['confidence'], settings['person_confidence'])
-                results = model.predict(
-                    frame,
-                    conf=min_conf,
-                    imgsz=640,
-                    verbose=False,
-                    device=_device
-                )
+                try:
+                    results = model.predict(
+                        frame,
+                        conf=min_conf,
+                        imgsz=640,
+                        verbose=False,
+                        device=_device
+                    )
+                except RuntimeError as cuda_err:
+                    if 'no kernel image' in str(cuda_err).lower() or 'cudaerror' in str(cuda_err).lower():
+                        global _device
+                        print(f"[MODEL] CUDA kernel error, fallback ke CPU: {cuda_err}")
+                        _device = 'cpu'
+                        model.to('cpu')
+                        results = model.predict(frame, conf=min_conf, imgsz=640, verbose=False, device='cpu')
+                    else:
+                        raise
                 result = results[0]
                 names = _model_names or {}
                 person_conf_thr = settings['person_confidence']
