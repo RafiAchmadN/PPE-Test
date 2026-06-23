@@ -1016,13 +1016,19 @@ def video_feed(cid):
 @app.route('/api/logs', methods=['GET'])
 @login_required
 def api_logs():
-    s     = request.args.get('start', date.today().replace(day=1).isoformat())
-    e     = request.args.get('end',   date.today().isoformat())
+    s     = request.args.get('start')
+    e     = request.args.get('end')
     limit = min(int(request.args.get('limit', 200)), 1000)  # max 1000 per request
-    rows  = db_execute(
-        "SELECT * FROM data WHERE Tanggal BETWEEN ? AND ? ORDER BY id DESC LIMIT ?",
-        (s, e, limit), fetch=True
-    )
+    if s and e:
+        rows = db_execute(
+            "SELECT * FROM data WHERE Tanggal BETWEEN ? AND ? ORDER BY id DESC LIMIT ?",
+            (s, e, limit), fetch=True
+        )
+    else:
+        rows = db_execute(
+            "SELECT * FROM data ORDER BY id DESC LIMIT ?",
+            (limit,), fetch=True
+        )
     # Cek file existence hanya untuk record yang ditampilkan (bukan semua)
     for r in rows:
         r['file_exists'] = os.path.isfile(os.path.join(OUTPUT_FOLDER, r.get('Bukti', '')))

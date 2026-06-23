@@ -541,7 +541,7 @@ async function loadDashboard(){
     document.getElementById('s-cams').textContent=s.active_cameras??'—';
     document.getElementById('s-online').textContent=s.online_cameras??'—';
   }
-  const logs=await api('/api/logs?start='+today()+'&end='+today()+'&limit=20');
+  const logs=await api('/api/logs?limit=20');
   const tb=document.querySelector('#dashTable tbody');
   if(!logs||!logs.length){tb.innerHTML=`<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:30px">Belum ada pelanggaran hari ini.</td></tr>`;return;}
   tb.innerHTML=logs.map(logRow).join('');
