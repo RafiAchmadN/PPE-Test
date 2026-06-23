@@ -111,10 +111,13 @@ def db_execute(query, params=(), fetch=False, fetchone=False):
     finally:
         conn.close()
 
+RETENTION_DAYS = 30  # hapus data lebih lama dari N hari (0 = tidak hapus)
+
 def _violation_writer():
     """Thread khusus menulis violations ke DB — camera thread tidak perlu tunggu DB."""
     conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
+    cleanup_counter = 0
     while True:
         try:
             item = _violation_queue.get(timeout=1)
@@ -123,6 +126,16 @@ def _violation_writer():
                 item
             )
             conn.commit()
+
+            # Jalankan cleanup setiap 1000 record baru (bukan tiap insert agar tidak lambat)
+            cleanup_counter += 1
+            if RETENTION_DAYS > 0 and cleanup_counter >= 1000:
+                cleanup_counter = 0
+                cutoff = (datetime.now() - __import__('datetime').timedelta(days=RETENTION_DAYS)).strftime('%Y-%m-%d')
+                deleted = conn.execute("DELETE FROM data WHERE Tanggal < ?", (cutoff,)).rowcount
+                conn.commit()
+                if deleted:
+                    print(f"[CLEANUP] Hapus {deleted:,} records lebih lama dari {cutoff}")
             _violation_queue.task_done()
         except queue.Empty:
             continue
