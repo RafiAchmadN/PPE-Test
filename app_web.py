@@ -1,12 +1,20 @@
+# =============================================================================
+#  MAPPER — Monitoring Automated PPE Detection & Reporting
+#  File   : app_web.py
+#  Fungsi : Backend utama sistem — mengelola model YOLO, stream kamera CCTV,
+#           deteksi APD real-time, logging pelanggaran ke SQLite, dan
+#           menyajikan dashboard web berbasis Flask.
+# =============================================================================
+
 import os
 import sys
 import json
 import time
-import queue
-import socket
-import sqlite3
-import secrets
-import threading
+import queue        # antrian thread-safe untuk penulisan pelanggaran ke DB
+import socket       # deteksi IP lokal untuk info akses jaringan
+import sqlite3      # basis data ringan tanpa server terpisah
+import secrets      # pembuatan secret key yang kriptografis aman
+import threading    # multi-threading: kamera, model, dan web berjalan paralel
 import traceback
 from datetime import datetime, date
 from functools import wraps
@@ -14,12 +22,14 @@ from urllib.parse import urlparse
 
 # GPU diaktifkan — hapus override CUDA_VISIBLE_DEVICES agar torch bisa detect GPU
 
-import cv2
+import cv2          # OpenCV: baca frame dari RTSP/CCTV, resize, encode JPEG
 import numpy as np
+# Flask: framework web ringan untuk REST API dan streaming MJPEG
 from flask import Flask, render_template, request, jsonify, Response, send_from_directory, session, redirect
 from werkzeug.security import generate_password_hash, check_password_hash
 
 # --- Optional: dukungan DVR Xiongmai/Sofia (port 34567) ---
+# Digunakan untuk kamera CCTV yang menggunakan protokol DVRIP (non-RTSP)
 try:
     from dvrip import DVRIPCam
     _DVRIP_LIB_OK = True
@@ -35,13 +45,13 @@ except ImportError:
 DVRIP_AVAILABLE = _DVRIP_LIB_OK and _AV_LIB_OK
 
 # --- CONFIG ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_BASE_URL = os.environ.get('APP_BASE_URL', '').rstrip('/')
-DATABASE_PATH = os.path.join(BASE_DIR, 'logging.db')
-OUTPUT_FOLDER = os.path.join(BASE_DIR, 'data', 'violations')
-UPLOAD_FOLDER = os.path.join(BASE_DIR, 'data', 'videos')
-INFERENCE_SIZE = (640, 480)
-ALLOWED_VIDEO_EXTS = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v'}
+BASE_DIR      = os.path.dirname(os.path.abspath(__file__))  # direktori root project
+APP_BASE_URL  = os.environ.get('APP_BASE_URL', '').rstrip('/')  # prefix URL jika di-deploy di sub-path
+DATABASE_PATH = os.path.join(BASE_DIR, 'logging.db')         # file SQLite log pelanggaran
+OUTPUT_FOLDER = os.path.join(BASE_DIR, 'data', 'violations') # folder simpan foto bukti pelanggaran
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'data', 'videos')     # folder video lokal untuk pengujian
+INFERENCE_SIZE       = (640, 480)
+ALLOWED_VIDEO_EXTS   = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v'}
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -187,7 +197,9 @@ _model_lock = threading.Lock()
 _model_type = None       # 'v5' or 'ultralytics'
 _model_names = {}
 _device = 'cpu'          # akan diupdate saat model load
-_inference_sem = threading.Semaphore(2)  # maks 2 kamera inference bersamaan
+# Queue bersama: camera thread push frame, inference worker ambil & proses batch
+# maxsize=40 → jika worker kewalahan, frame lama di-drop (tidak menumpuk di RAM)
+_infer_queue = queue.Queue(maxsize=40)
 
 def load_model():
     global _model, _model_type, _model_names
@@ -253,72 +265,175 @@ def run_inference(frame):
 
     violations = []
     try:
-        with _inference_sem:  # maks 2 inference bersamaan, sisanya tunggu
-            if mtype == 'ultralytics':
-                import torch
-                min_conf = min(settings['confidence'], settings['person_confidence'])
-                try:
-                    results = model.predict(
-                        frame,
-                        conf=min_conf,
-                        imgsz=640,
-                        verbose=False,
-                        device=_device
-                    )
-                except RuntimeError as cuda_err:
-                    if 'no kernel image' in str(cuda_err).lower() or 'cudaerror' in str(cuda_err).lower():
-                        print(f"[MODEL] CUDA kernel error, fallback ke CPU: {cuda_err}")
-                        _device = 'cpu'
-                        model.to('cpu')
-                        results = model.predict(frame, conf=min_conf, imgsz=640, verbose=False, device='cpu')
-                    else:
-                        raise
-                result = results[0]
-                names = _model_names or {}
-                person_conf_thr = settings['person_confidence']
-                ppe_conf_thr    = settings['confidence']
+        if mtype == 'ultralytics':
+            import torch
+            min_conf = min(settings['confidence'], settings['person_confidence'])
+            try:
+                results = model.predict(
+                    frame, conf=min_conf, imgsz=640, verbose=False, device=_device
+                )
+            except RuntimeError as cuda_err:
+                if 'no kernel image' in str(cuda_err).lower() or 'cudaerror' in str(cuda_err).lower():
+                    print(f"[MODEL] CUDA kernel error, fallback ke CPU: {cuda_err}")
+                    _device = 'cpu'
+                    model.to('cpu')
+                    results = model.predict(frame, conf=min_conf, imgsz=640, verbose=False, device='cpu')
+                else:
+                    raise
+            result = results[0]
+            names = _model_names or {}
+            person_conf_thr = settings['person_confidence']
+            ppe_conf_thr    = settings['confidence']
 
-                # Filter per class — gunakan torch tensor untuk boolean indexing
-                if len(result.boxes) > 0:
-                    keep = []
-                    for b in result.boxes:
-                        cname = (names.get(int(b.cls[0]), '')).lower()
-                        thr = person_conf_thr if cname == 'person' else ppe_conf_thr
-                        keep.append(float(b.conf[0]) >= thr)
-                    mask = torch.tensor(keep, dtype=torch.bool)
-                    result.boxes = result.boxes[mask]
-
-                annotated = result.plot()
-
+            if len(result.boxes) > 0:
+                keep = []
                 for b in result.boxes:
-                    cid   = int(b.cls[0])
-                    cnf   = float(b.conf[0])
-                    cname = names.get(cid, f'unknown_{cid}')
-                    vt    = _classify(cid, cname)
-                    if vt:
-                        violations.append({'type': vt, 'conf': cnf})
+                    cname = (names.get(int(b.cls[0]), '')).lower()
+                    thr = person_conf_thr if cname == 'person' else ppe_conf_thr
+                    keep.append(float(b.conf[0]) >= thr)
+                mask = torch.tensor(keep, dtype=torch.bool)
+                result.boxes = result.boxes[mask]
 
-            elif mtype == 'v5':
-                model.conf = settings['confidence']
-                results = model(frame)
-                annotated = np.squeeze(results.render())
-                coor = results.xyxy[0]
-                names = model.names if hasattr(model, 'names') else {}
-                for i in range(len(coor)):
-                    cid   = int(coor[i][5].item())
-                    cnf   = float(coor[i][4].item())
-                    cname = names.get(cid, '') if isinstance(names, dict) else (names[cid] if cid < len(names) else '')
-                    vt    = _classify(cid, cname)
-                    if vt:
-                        violations.append({'type': vt, 'conf': cnf})
-            else:
-                annotated = frame
+            annotated = result.plot()
+            for b in result.boxes:
+                cid   = int(b.cls[0])
+                cnf   = float(b.conf[0])
+                cname = names.get(cid, f'unknown_{cid}')
+                vt    = _classify(cid, cname)
+                if vt:
+                    violations.append({'type': vt, 'conf': cnf})
+
+        elif mtype == 'v5':
+            model.conf = settings['confidence']
+            results = model(frame)
+            annotated = np.squeeze(results.render())
+            coor = results.xyxy[0]
+            names = model.names if hasattr(model, 'names') else {}
+            for i in range(len(coor)):
+                cid   = int(coor[i][5].item())
+                cnf   = float(coor[i][4].item())
+                cname = names.get(cid, '') if isinstance(names, dict) else (names[cid] if cid < len(names) else '')
+                vt    = _classify(cid, cname)
+                if vt:
+                    violations.append({'type': vt, 'conf': cnf})
+        else:
+            annotated = frame
 
     except Exception as e:
         print(f"[INFERENCE] Error saat deteksi: {e}")
         annotated = frame
- 
+
     return annotated, violations
+
+
+def _inference_worker():
+    """Dedicated thread: ambil frame dari _infer_queue, proses batch, kirim hasil balik.
+
+    Satu worker mampu menangani 10–20 kamera karena GPU memproses satu batch
+    (N frame) hampir secepat memproses 1 frame secara sendiri-sendiri.
+    Tambah worker ke-2 (NUM_WORKERS=2) jika kamera > 20.
+    """
+    BATCH_SIZE = 8     # jumlah frame per batch — sesuaikan dengan VRAM GPU
+    BATCH_WAIT  = 0.04  # tunggu max 40ms untuk kumpulkan frame sebelum proses
+
+    while True:
+        batch = []   # list of (CameraStream_instance, frame_ndarray)
+        deadline = time.time() + BATCH_WAIT
+
+        # Kumpulkan frame dari berbagai kamera sampai batch penuh atau timeout
+        while len(batch) < BATCH_SIZE:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            try:
+                item = _infer_queue.get(timeout=max(remaining, 0.001))
+                batch.append(item)
+            except queue.Empty:
+                break
+
+        if not batch:
+            time.sleep(0.01)
+            continue
+
+        if not settings['inference_enabled']:
+            # Inference dimatikan — kembalikan frame mentah ke masing-masing kamera
+            for cs, frame in batch:
+                with cs.lock:
+                    cs.frame = frame
+            continue
+
+        model, mtype = load_model()
+        if model is None or mtype != 'ultralytics':
+            for cs, frame in batch:
+                with cs.lock:
+                    cs.frame = frame
+            continue
+
+        try:
+            import torch
+            frames     = [item[1] for item in batch]
+            min_conf   = min(settings['confidence'], settings['person_confidence'])
+
+            # Satu panggilan predict untuk semua frame dalam batch
+            results = model.predict(frames, conf=min_conf, imgsz=640, verbose=False, device=_device)
+
+            names           = _model_names or {}
+            person_conf_thr = settings['person_confidence']
+            ppe_conf_thr    = settings['confidence']
+
+            for (cs, orig_frame), result in zip(batch, results):
+                # Filter confidence per kelas
+                if len(result.boxes) > 0:
+                    keep = []
+                    for b in result.boxes:
+                        cname = names.get(int(b.cls[0]), '').lower()
+                        thr   = person_conf_thr if cname == 'person' else ppe_conf_thr
+                        keep.append(float(b.conf[0]) >= thr)
+                    result.boxes = result.boxes[torch.tensor(keep, dtype=torch.bool)]
+
+                annotated = result.plot()
+
+                # Update frame kamera dengan overlay bounding box
+                with cs.lock:
+                    cs.frame = annotated
+
+                # Cek dan log pelanggaran
+                violations = []
+                for b in result.boxes:
+                    cid  = int(b.cls[0])
+                    cnf  = float(b.conf[0])
+                    cname = names.get(cid, '')
+                    vt   = _classify(cid, cname)
+                    if vt:
+                        violations.append({'type': vt, 'conf': cnf})
+
+                if violations:
+                    delay = settings['violation_delay']
+                    if time.time() - cs.last_violation_time >= delay:
+                        v      = violations[0]
+                        ts     = time.strftime("%m%d%H%M%S")
+                        prefix = "tanpahelm" if v['type'] == 'no-helmet' else "tanpavest"
+                        fname  = f'{prefix}_{cs.name.replace(" ", "")}_{ts}.jpg'
+                        fpath  = os.path.join(OUTPUT_FOLDER, fname)
+                        try:
+                            cv2.imwrite(fpath, annotated)
+                            _violation_queue.put((
+                                time.strftime("%Y-%m-%d"),
+                                datetime.now().strftime("%H:%M:%S"),
+                                cs.name, fname, v['type']
+                            ))
+                            print(f"[VIOLATION] {cs.name}: {v['type']} conf={v['conf']:.2f}")
+                        except Exception as e:
+                            print(f"[VIOLATION] Save error: {e}")
+                        cs.last_violation_time = time.time()
+
+        except Exception as e:
+            print(f"[INFER WORKER] Batch error: {e}")
+            for cs, frame in batch:
+                with cs.lock:
+                    cs.frame = frame
+
+
 # ─── CAMERA STREAMING ────────────────────────────────────────────────────────
 class CameraStream:
     def __init__(self, cam_id, url, name):
@@ -416,45 +531,21 @@ class CameraStream:
         # Regular URL (RTSP, HTTP MJPEG, etc.)
         return url, None
 
-    # ── Helper bersama: jalankan inference + logging untuk SEMUA jenis stream ──
-    def _handle_frame(self, frame):
-        """Run inference, log violations if any, store latest frame for streaming."""
-        if frame is None:
-            return
-        if settings['inference_enabled']:
-            try:
-                annotated, violations = run_inference(frame)
-            except Exception:
-                annotated, violations = frame, []
-
-            delay = settings['violation_delay']
-            if violations and (time.time() - self.last_violation_time >= delay):
-                v = violations[0]
-                ts = time.strftime("%m%d%H%M%S")
-                tgl = time.strftime("%Y-%m-%d")
-                wkt = datetime.now().strftime("%H:%M:%S")
-                prefix = "tanpahelm" if v['type'] == 'no-helmet' else "tanpavest"
-                fname = f'{prefix}_{self.name.replace(" ", "")}_{ts}.jpg'
-                fpath = os.path.join(OUTPUT_FOLDER, fname)
-                try:
-                    cv2.imwrite(fpath, annotated)
-                    _violation_queue.put((tgl, wkt, self.name, fname, v['type']))
-                    print(f"[VIOLATION] {self.name}: {v['type']} conf={v['conf']:.2f} -> {fname}")
-                except Exception as e:
-                    print(f"[VIOLATION] Save error: {e}")
-                self.last_violation_time = time.time()
-
-            with self.lock:
-                self.frame = annotated
-        else:
-            with self.lock:
-                self.frame = frame
+    def _push_frame(self, frame):
+        """Kirim frame ke inference worker (non-blocking).
+        Jika queue penuh, frame di-drop — lebih baik lewati 1 frame
+        daripada menunda seluruh pipeline."""
+        try:
+            _infer_queue.put_nowait((self, frame))
+        except queue.Full:
+            pass
 
     def _loop(self):
         cap = None
         retry_delay = 3
         fc = 0
         ft = time.time()
+        infer_fc = 0   # counter untuk skip frame inference
 
         while self.active:
             # Connect / reconnect
@@ -535,18 +626,24 @@ class CameraStream:
                 time.sleep(retry_delay)
                 continue
 
-            # FPS
+            # FPS counter (diukur dari frame capture, bukan inference)
             fc += 1
             el = time.time() - ft
             if el >= 2:
                 self.fps = fc / el
                 fc = 0; ft = time.time()
 
-            # Inference + violation logging (via shared helper)
-            self._handle_frame(frame)
+            # Simpan frame mentah untuk streaming — tidak tunggu inference
+            with self.lock:
+                self.frame = frame
 
-            # Throttle
-            time.sleep(1.0 / max(settings['stream_fps'], 1))
+            # Push setiap 3 frame ke inference worker (non-blocking)
+            infer_fc += 1
+            if infer_fc >= 3:
+                infer_fc = 0
+                self._push_frame(frame)
+
+            time.sleep(1.0 / max(settings['stream_fps'] * 2, 1))
 
         if cap: cap.release()
 
@@ -617,7 +714,9 @@ class CameraStream:
                 for packet in packets:
                     for fr in codec.decode(packet):
                         img = fr.to_ndarray(format='bgr24')
-                        self._handle_frame(img)
+                        with self.lock:
+                            self.frame = img
+                        self._push_frame(img)
                         frame_counter[0] += 1
             except Exception:
                 # Decode H264 kadang error di awal sampai dapat keyframe — diam saja
@@ -950,6 +1049,10 @@ if __name__ == '__main__':
     init_db()
     threading.Thread(target=load_model, daemon=True).start()
     threading.Thread(target=_violation_writer, daemon=True).start()
+    # Inference worker — tambah NUM_WORKERS=2 jika kamera > 20
+    NUM_WORKERS = 1
+    for _ in range(NUM_WORKERS):
+        threading.Thread(target=_inference_worker, daemon=True).start()
     start_all_cameras()
     local_ip = get_local_ip()
     print("=" * 60)
