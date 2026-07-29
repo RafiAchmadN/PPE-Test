@@ -80,19 +80,24 @@ MAPPER adalah sistem deteksi APD otomatis yang membaca feed video CCTV secara re
            │                              │
            ▼                              ▼
 ┌─────────────────────────────────────────────────────────┐
-│                   Flask Backend                          │
+│           Flask Backend — JSON API (:5000)                │
 │  /api/stream/<id> (MJPEG, 5fps)                         │
 │  /api/logs, /api/stats, /api/cameras, /api/settings     │
+│  CORS (flask-cors) + session cookie                     │
 └───────────────────────┬─────────────────────────────────┘
-                        │
+                        │  fetch (credentials: include)
                         ▼
 ┌─────────────────────────────────────────────────────────┐
-│                 Dashboard Web (Browser)                  │
+│     Frontend — React + Tailwind + daisyUI (:8080/:5173)  │
 │  Live Stream + Bounding Box Overlay                     │
-│  Statistik Kepatuhan + Riwayat Pelanggaran              │
+│  Statistik Kepatuhan (radial meter) + Riwayat Pelanggaran│
 │  Manajemen Kamera (CRUD) + Settings                     │
 └─────────────────────────────────────────────────────────┘
 ```
+
+Backend dan frontend adalah dua service independen (dua container, dua port) yang
+berkomunikasi lewat HTTP + CORS — bukan lagi Flask yang me-render halaman. Lihat
+`frontend/` untuk source React dan `app_web.py` untuk API.
 
 ---
 
@@ -167,11 +172,14 @@ cd PPE-Test
 ```
 
 ### 2. Jalankan dengan Docker (Direkomendasikan)
+Backend (Flask API) dan frontend (React) adalah dua service terpisah — lihat
+[Arsitektur Sistem](#arsitektur-sistem).
+
 ```bash
 # Build image (pertama kali, butuh ~10-15 menit download PyTorch cu128)
 docker compose -f PPE-docker-compose.yml build
 
-# Jalankan container
+# Jalankan kedua container (backend :5000, frontend :8080)
 docker compose -f PPE-docker-compose.yml up -d
 
 # Cek status
@@ -179,7 +187,7 @@ docker compose -f PPE-docker-compose.yml logs -f
 ```
 
 ### 3. Akses Dashboard
-Buka browser: `http://localhost:5000/ppe`
+Buka browser: `http://localhost:8080`
 
 **Login default:**
 - Username: `admin`
@@ -192,24 +200,47 @@ docker compose -f PPE-docker-compose.yml build   # tanpa --no-cache (reuse layer
 docker compose -f PPE-docker-compose.yml up -d
 ```
 
+### 5. Jalankan Manual untuk Development (tanpa Docker)
+```bash
+# Terminal 1 — backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python app_web.py                 # http://localhost:5000
+
+# Terminal 2 — frontend
+cd frontend
+npm install
+npm run dev                       # http://localhost:5173 (proxy ke backend via VITE_API_URL)
+```
+
 ---
 
 ## Konfigurasi
 
-### Environment Variables (`PPE-docker-compose.yml`)
+### Environment Variables
+
+**Backend** (`PPE-docker-compose.yml` → service `ppe-backend`):
 ```yaml
 environment:
-  - APP_BASE_URL=/ppe          # Base path URL (ubah jika diakses via subpath)
+  - FRONTEND_ORIGIN=http://localhost:8080  # Origin frontend yang diizinkan CORS (pisahkan koma jika >1)
   - PYTHONUNBUFFERED=1
-  - NVIDIA_VISIBLE_DEVICES=all # GPU visibility
+  - NVIDIA_VISIBLE_DEVICES=all              # GPU visibility
+  # - SECRET_KEY=ganti-dengan-random-string-panjang   (opsional, production)
+  # - SESSION_COOKIE_SECURE=1                          (wajib jika akses via HTTPS)
 ```
+
+**Frontend** (`frontend/.env` atau build arg `VITE_API_URL` di `PPE-docker-compose.yml`):
+```env
+VITE_API_URL=http://localhost:5000   # Base URL backend yang bisa diakses browser
+```
+> `VITE_API_URL` di-*bake* ke bundle JS saat `npm run build` — kalau backend diakses lewat
+> domain/IP lain, set env var ini sebelum build ulang frontend.
 
 ### Volumes
 ```yaml
 volumes:
   - ./logging.db:/app/logging.db     # Database SQLite
-  - ./foto:/app/foto                 # Foto profil (unused)
-  - ./data:/app/data                 # Violations snapshots & video
+  - ./data:/app/data                 # Violations snapshots & video upload
 ```
 
 ### Pengaturan Deteksi (via Dashboard Settings)
@@ -249,39 +280,50 @@ Menu **Settings** → **Change Password** → isi password baru
 
 ## API Reference
 
-Semua endpoint memerlukan autentikasi (session cookie setelah login).
+Backend (`http://localhost:5000`) adalah JSON API murni — semua endpoint `/api/*`
+memerlukan autentikasi (session cookie, credentials cross-origin lewat CORS).
 
 ### Autentikasi
 ```http
-POST /ppe/login
+POST /api/auth/login
 Content-Type: application/json
 {"username": "admin", "password": "admin123"}
+
+POST /api/auth/logout
+GET  /api/auth/status                # {"logged_in": true|false}
+POST /api/auth/change-password       # {"current": "...", "new": "..."}
 ```
 
 ### Kamera
 ```http
-GET    /ppe/api/cameras              # List semua kamera
-POST   /ppe/api/cameras              # Tambah kamera baru
-PUT    /ppe/api/cameras/<id>         # Update kamera
-DELETE /ppe/api/cameras/<id>         # Hapus kamera
-GET    /ppe/api/cameras/<id>/info    # Status koneksi & FPS
+GET    /api/cameras                  # List semua kamera + status online/fps
+POST   /api/cameras                  # Tambah kamera baru
+PUT    /api/cameras/<id>             # Update kamera
+DELETE /api/cameras/<id>             # Hapus kamera
+POST   /api/cameras/visible          # {"ids":[1,2]} kamera yang tertampil di frontend saat ini
+                                      # (membatasi YOLO inference — kirim {"ids":null} untuk lepas batas)
 ```
 
-### Streaming
+### Streaming & Upload Video
 ```http
-GET /ppe/api/stream/<camera_id>      # MJPEG stream (multipart/x-mixed-replace)
+GET    /api/stream/<camera_id>       # MJPEG stream (multipart/x-mixed-replace)
+GET    /api/videos                   # List video yang sudah di-upload
+POST   /api/videos/upload            # Upload file video untuk testing
+DELETE /api/videos/<filename>        # Hapus video upload
 ```
 
 ### Statistik & Log
 ```http
-GET /ppe/api/stats                   # Statistik pelanggaran (total, hari ini, per tipe)
-GET /ppe/api/logs?start=YYYY-MM-DD&end=YYYY-MM-DD  # Riwayat pelanggaran
+GET /api/stats                       # Total/hari ini pelanggaran, kamera aktif/online,
+                                      # compliance_pct & compliant/violation_frames (kepatuhan APD)
+GET /api/logs?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=200  # Riwayat pelanggaran
+GET /foto/<filename>                 # Snapshot bukti pelanggaran (JPEG)
 ```
 
 ### Settings
 ```http
-GET  /ppe/api/settings               # Baca pengaturan saat ini
-POST /ppe/api/settings               # Update pengaturan
+GET /api/settings                    # Baca pengaturan saat ini
+PUT /api/settings                    # Update pengaturan
 ```
 
 ---
@@ -357,16 +399,26 @@ python workflow/step4_train.py
 
 ```
 PPE-Test/
-├── app_web.py              # Aplikasi Flask utama
+├── app_web.py              # Backend Flask — JSON API murni (CORS + session)
 ├── best.pt                 # Bobot model YOLOv11m terlatih
-├── PPE-Dockerfile          # Docker image (CUDA 12.8 + PyTorch cu128)
-├── PPE-docker-compose.yml  # Docker Compose configuration
+├── PPE-Dockerfile          # Docker image backend (CUDA 12.8 + PyTorch cu128)
+├── PPE-docker-compose.yml  # Docker Compose — service ppe-backend + ppe-frontend
 ├── requirements.txt        # Python dependencies
 ├── exportdb.py             # Utilitas ekspor database ke Excel/CSV
 ├── logging.db              # Database SQLite (auto-generated)
-├── templates/
-│   ├── index.html          # Dashboard monitoring (SPA)
-│   └── login.html          # Halaman login
+├── static/                 # Aset dilayani langsung Flask (logo HETI, dll)
+├── frontend/                # Frontend React + Tailwind + daisyUI (service terpisah)
+│   ├── Dockerfile           # Multi-stage build → nginx
+│   ├── nginx.conf           # SPA fallback routing
+│   ├── package.json
+│   ├── .env.development     # VITE_API_URL untuk dev lokal
+│   └── src/
+│       ├── App.jsx          # Routing (react-router-dom)
+│       ├── lib/api.js       # Klien fetch ke backend
+│       ├── context/         # AuthContext (status login)
+│       ├── hooks/           # useVisibleCameras (sinkron kamera aktif ↔ YOLO)
+│       ├── components/      # Sidebar, Topbar, StatCard, ComplianceMeter, dll
+│       └── pages/           # Dashboard, LiveCameras, CameraManagement, Logs, Settings
 ├── data/
 │   ├── violations/         # Snapshot JPEG pelanggaran
 │   └── videos/             # File video untuk testing
@@ -394,9 +446,10 @@ PPE-Test/
 |----------|-----------|
 | Object Detection | YOLOv11m (Ultralytics) |
 | Video Processing | OpenCV 4.13 |
-| Web Framework | Flask 3.1.3 |
+| Backend API | Flask 3.1.3 + flask-cors (JSON API murni) |
 | Database | SQLite (via Python sqlite3) |
-| Frontend | Vanilla JS + CSS (no framework) |
+| Frontend | React 19 + React Router + Tailwind CSS v4 + daisyUI v5 (service terpisah) |
+| Frontend Build/Serve | Vite (dev) → nginx (production, static build) |
 | Container | Docker + NVIDIA Container Toolkit |
 | GPU | CUDA 12.8 + PyTorch cu128 |
 | Python | 3.11 |

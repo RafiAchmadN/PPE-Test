@@ -1,0 +1,45 @@
+@import "tailwindcss";
+@plugin "daisyui" {
+  themes: heti --default;
+}
+
+@plugin "daisyui/theme" {
+  name: "heti";
+  default: true;
+  color-scheme: light;
+  --color-base-100: #ffffff;
+  --color-base-200: #f3f5f9;
+  --color-base-300: #e2e7f0;
+  --color-base-content: #16233a;
+  --color-primary: #117ebf;
+  --color-primary-content: #ffffff;
+  --color-secondary: #7c3aed;
+  --color-secondary-content: #ffffff;
+  --color-accent: #1a3f6b;
+  --color-accent-content: #ffffff;
+  --color-neutral: #0a1826;
+  --color-neutral-content: #cbd8e8;
+  --color-info: #117ebf;
+  --color-info-content: #ffffff;
+  --color-success: #16a34a;
+  --color-success-content: #ffffff;
+  --color-warning: #d97706;
+  --color-warning-content: #ffffff;
+  --color-error: #dc2626;
+  --color-error-content: #ffffff;
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+body {
+  margin: 0;
+  font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+}
+
+.font-mono-app {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}

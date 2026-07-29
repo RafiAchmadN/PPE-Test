@@ -10,26 +10,21 @@ import os
 import sys
 import json
 import time
-import queue        # antrian thread-safe untuk penulisan pelanggaran ke DB
-import socket       # deteksi IP lokal untuk info akses jaringan
-import sqlite3      # basis data ringan tanpa server terpisah
-import secrets      # pembuatan secret key yang kriptografis aman
-import threading    # multi-threading: kamera, model, dan web berjalan paralel
+import queue       
+import socket       
+import sqlite3      
+import secrets      
+import threading    
 import traceback
 from datetime import datetime, date
 from functools import wraps
 from urllib.parse import urlparse
-
-# GPU diaktifkan — hapus override CUDA_VISIBLE_DEVICES agar torch bisa detect GPU
-
-import cv2          # OpenCV: baca frame dari RTSP/CCTV, resize, encode JPEG
+import cv2
 import numpy as np
-# Flask: framework web ringan untuk REST API dan streaming MJPEG
-from flask import Flask, render_template, request, jsonify, Response, send_from_directory, session, redirect
+from flask import Flask, request, jsonify, Response, send_from_directory, session
+from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 
-# --- Optional: dukungan DVR Xiongmai/Sofia (port 34567) ---
-# Digunakan untuk kamera CCTV yang menggunakan protokol DVRIP (non-RTSP)
 try:
     from dvrip import DVRIPCam
     _DVRIP_LIB_OK = True
@@ -37,7 +32,7 @@ except ImportError:
     _DVRIP_LIB_OK = False
 
 try:
-    import av  # PyAV untuk decode H264 dari Sofia stream
+    import av  
     _AV_LIB_OK = True
 except ImportError:
     _AV_LIB_OK = False
@@ -45,26 +40,31 @@ except ImportError:
 DVRIP_AVAILABLE = _DVRIP_LIB_OK and _AV_LIB_OK
 
 # --- CONFIG ---
-BASE_DIR      = os.path.dirname(os.path.abspath(__file__))  # direktori root project
-APP_BASE_URL  = os.environ.get('APP_BASE_URL', '').rstrip('/')  # prefix URL jika di-deploy di sub-path
-DATABASE_PATH = os.path.join(BASE_DIR, 'logging.db')         # file SQLite log pelanggaran
-OUTPUT_FOLDER = os.path.join(BASE_DIR, 'data', 'violations') # folder simpan foto bukti pelanggaran
-UPLOAD_FOLDER = os.path.join(BASE_DIR, 'data', 'videos')     # folder video lokal untuk pengujian
+BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
+DATABASE_PATH = os.path.join(BASE_DIR, 'logging.db')
+OUTPUT_FOLDER = os.path.join(BASE_DIR, 'data', 'violations')
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'data', 'videos')
 INFERENCE_SIZE       = (640, 480)
 ALLOWED_VIDEO_EXTS   = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v'}
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-app = Flask(__name__, static_folder='static', template_folder='templates')
+# Frontend React (Vite) berjalan sebagai service terpisah — lihat frontend/.
+# Boleh diisi banyak origin dipisah koma lewat env var untuk deployment lain.
+FRONTEND_ORIGINS = os.environ.get('FRONTEND_ORIGIN', 'http://localhost:5173').split(',')
+
+app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'ppe-monitor-default-change-me-2026')
+# credentials (cookie sesi) harus ikut terkirim dari origin frontend yang berbeda port/domain
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '0') == '1'
+CORS(app, supports_credentials=True, origins=FRONTEND_ORIGINS)
 
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if not session.get('logged_in'):
-            if request.path.startswith('/api/'):
-                return jsonify({'error': 'Unauthorized'}), 401
-            return redirect(APP_BASE_URL + '/login')
+            return jsonify({'error': 'Unauthorized'}), 401
         return f(*args, **kwargs)
     return decorated
 
@@ -213,6 +213,55 @@ _device = 'cpu'          # akan diupdate saat model load
 # Queue bersama: camera thread push frame, inference worker ambil & proses batch
 # maxsize=40 → jika worker kewalahan, frame lama di-drop (tidak menumpuk di RAM)
 _infer_queue = queue.Queue(maxsize=40)
+
+# Kamera yang sedang tertampil di grid Live Cameras pada frontend (4 kamera per
+# halaman). Selama _visible_restricted=True, YOLO inference hanya dijalankan
+# untuk kamera yang ada di _visible_cam_ids, supaya beban GPU/CPU tidak naik
+# terus seiring jumlah total kamera. Saat user meninggalkan halaman Live Cameras,
+# frontend melepas pembatasan (_visible_restricted=False) sehingga seluruh kamera
+# kembali dideteksi terus-menerus seperti semula (monitoring 24/7 tetap jalan).
+_visible_lock = threading.Lock()
+_visible_cam_ids = set()
+_visible_restricted = False
+
+def _is_camera_visible(cam_id):
+    with _visible_lock:
+        if not _visible_restricted:
+            return True
+        return cam_id in _visible_cam_ids
+
+# Statistik kepatuhan APD harian — dihitung dari frame yang benar-benar diproses
+# YOLO (bukan estimasi/rekaan). Setiap frame yang mengandung minimal satu Person
+# diklasifikasikan compliant (tidak ada pelanggaran) atau violation (ada
+# pelanggaran), lalu diakumulasi per hari. Reset otomatis saat tanggal berganti.
+# Ini metrik "seberapa sering pemantauan menemukan APD lengkap", bukan hitungan
+# pekerja unik (sistem ini tidak melakukan person-tracking lintas frame).
+_frame_stats_lock = threading.Lock()
+_frame_stats = {'date': None, 'compliant': 0, 'violation': 0}
+
+def _record_frame_compliance(has_person, has_violation):
+    if not has_person:
+        return
+    with _frame_stats_lock:
+        today_str = date.today().isoformat()
+        if _frame_stats['date'] != today_str:
+            _frame_stats['date'] = today_str
+            _frame_stats['compliant'] = 0
+            _frame_stats['violation'] = 0
+        if has_violation:
+            _frame_stats['violation'] += 1
+        else:
+            _frame_stats['compliant'] += 1
+
+def get_compliance_stats():
+    with _frame_stats_lock:
+        if _frame_stats['date'] != date.today().isoformat():
+            return {'compliant_frames': 0, 'violation_frames': 0, 'compliance_pct': None}
+        compliant = _frame_stats['compliant']
+        violation = _frame_stats['violation']
+    total = compliant + violation
+    pct = round(compliant / total * 100, 1) if total else None
+    return {'compliant_frames': compliant, 'violation_frames': violation, 'compliance_pct': pct}
 
 def load_model():
     global _model, _model_type, _model_names
@@ -412,13 +461,18 @@ def _inference_worker():
 
                 # Cek dan log pelanggaran
                 violations = []
+                has_person = False
                 for b in result.boxes:
                     cid  = int(b.cls[0])
                     cnf  = float(b.conf[0])
                     cname = names.get(cid, '')
+                    if cname.lower() == 'person':
+                        has_person = True
                     vt   = _classify(cid, cname)
                     if vt:
                         violations.append({'type': vt, 'conf': cnf})
+
+                _record_frame_compliance(has_person, bool(violations))
 
                 if violations:
                     delay = settings['violation_delay']
@@ -646,15 +700,26 @@ class CameraStream:
                 self.fps = fc / el
                 fc = 0; ft = time.time()
 
-            # Simpan frame mentah untuk streaming — tidak tunggu inference
-            with self.lock:
-                self.frame = frame
+            # Simpan frame mentah untuk streaming — tidak tunggu inference.
+            # PENTING: kalau kamera ini sedang aktif dideteksi (visible + inference
+            # enabled), JANGAN timpa cs.frame di sini — biarkan _inference_worker
+            # yang menulis frame beranotasi (lihat di bawah). Loop capture ini jalan
+            # ~10x/detik sedangkan inference cuma update tiap beberapa ratus ms, jadi
+            # kalau frame mentah selalu menimpa balik, bounding box akan kedip-kedip
+            # (muncul sekejap lalu ketiban frame mentah tanpa kotak). Kalau kamera
+            # tidak sedang dideteksi, stream tetap hidup dari sini (tanpa overlay).
+            is_being_annotated = settings['inference_enabled'] and _is_camera_visible(self.cam_id)
+            if not is_being_annotated:
+                with self.lock:
+                    self.frame = frame
 
-            # Push setiap 3 frame ke inference worker (non-blocking)
+            # Push setiap 3 frame ke inference worker (non-blocking) — hanya jika
+            # kamera ini sedang tertampil di frontend (lihat _is_camera_visible)
             infer_fc += 1
             if infer_fc >= 3:
                 infer_fc = 0
-                self._push_frame(frame)
+                if _is_camera_visible(self.cam_id):
+                    self._push_frame(frame)
 
             time.sleep(1.0 / max(settings['stream_fps'] * 2, 1))
 
@@ -727,9 +792,15 @@ class CameraStream:
                 for packet in packets:
                     for fr in codec.decode(packet):
                         img = fr.to_ndarray(format='bgr24')
-                        with self.lock:
-                            self.frame = img
-                        self._push_frame(img)
+                        # Sama seperti _loop: jangan timpa cs.frame dengan frame mentah
+                        # kalau kamera ini sedang aktif dideteksi, supaya overlay bounding
+                        # box dari _inference_worker tidak kedip ketiban frame mentah.
+                        is_being_annotated = settings['inference_enabled'] and _is_camera_visible(self.cam_id)
+                        if not is_being_annotated:
+                            with self.lock:
+                                self.frame = img
+                        if _is_camera_visible(self.cam_id):
+                            self._push_frame(img)
                         frame_counter[0] += 1
             except Exception:
                 # Decode H264 kadang error di awal sampai dapat keyframe — diam saja
@@ -832,16 +903,9 @@ def restart_camera(cid):
         camera_streams[r['id']] = cs
         cs.start()
 
-# ─── FLASK ROUTES ────────────────────────────────────────────────────────────
+# ─── FLASK ROUTES (JSON API murni — frontend React terpisah) ─────────────────
 
-# Auth routes (not protected)
-@app.route('/login', methods=['GET'])
-def login_page():
-    if session.get('logged_in'):
-        return redirect(APP_BASE_URL + '/')
-    return render_template('login.html', app_base=APP_BASE_URL)
-
-@app.route('/login', methods=['POST'])
+@app.route('/api/auth/login', methods=['POST'])
 def login_post():
     d = request.json or {}
     username = d.get('username', '').strip()
@@ -855,16 +919,14 @@ def login_post():
     session.permanent = True
     return jsonify({'ok': True})
 
-@app.route('/logout')
+@app.route('/api/auth/logout', methods=['POST'])
 def logout():
     session.clear()
-    return redirect(APP_BASE_URL + '/login')
+    return jsonify({'ok': True})
 
-@app.route('/')
-@login_required
-def index():
-    base = os.environ.get('APP_BASE_URL', '').rstrip('/')
-    return render_template('index.html', app_base=base)
+@app.route('/api/auth/status')
+def auth_status():
+    return jsonify({'logged_in': bool(session.get('logged_in'))})
 
 @app.route('/foto/<path:filename>')
 @login_required
@@ -936,6 +998,27 @@ def api_cameras_delete(cid):
     stop_camera(cid)
     db_execute("DELETE FROM cameras WHERE id=?", (cid,))
     return jsonify({'ok': True})
+
+@app.route('/api/cameras/visible', methods=['POST'])
+@login_required
+def api_cameras_visible():
+    """Frontend melaporkan kamera mana yang sedang tertampil di grid Live Cameras
+    (4 kamera per halaman). Selama pembatasan aktif, YOLO inference hanya jalan
+    untuk kamera-kamera ini. Kirim {"ids": null} untuk melepas pembatasan (dipakai
+    saat user meninggalkan halaman Live Cameras) — semua kamera kembali dideteksi
+    terus-menerus seperti semula."""
+    global _visible_restricted
+    d = request.json or {}
+    ids = d.get('ids')
+    with _visible_lock:
+        if ids is None:
+            _visible_restricted = False
+            _visible_cam_ids.clear()
+        else:
+            _visible_restricted = True
+            _visible_cam_ids.clear()
+            _visible_cam_ids.update(int(i) for i in ids)
+    return jsonify({'ok': True, 'restricted': _visible_restricted, 'visible': sorted(_visible_cam_ids)})
 
 # ── Upload video lokal untuk testing PPE detection ─────────────────────
 @app.route('/api/videos', methods=['GET'])
@@ -1037,13 +1120,15 @@ def api_logs():
 @app.route('/api/stats', methods=['GET'])
 @login_required
 def api_stats():
-    return jsonify({
+    stats = {
         'total_violations': db_execute("SELECT COUNT(*) as c FROM data", fetchone=True)['c'],
         'today_violations': db_execute("SELECT COUNT(*) as c FROM data WHERE Tanggal=?", (date.today().isoformat(),), fetchone=True)['c'],
         'active_cameras':   db_execute("SELECT COUNT(*) as c FROM cameras WHERE enabled=1", fetchone=True)['c'],
         'online_cameras':   sum(1 for cs in camera_streams.values() if cs.connected),
         'by_type':          {r['jenis'] or 'unknown': r['cnt'] for r in db_execute("SELECT jenis, COUNT(*) as cnt FROM data GROUP BY jenis", fetch=True)},
-    })
+    }
+    stats.update(get_compliance_stats())
+    return jsonify(stats)
 
 # Settings
 @app.route('/api/settings', methods=['GET'])

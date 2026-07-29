@@ -1,18 +1,20 @@
 services:
-  ppe-dashboard:
+  ppe-backend:
     build:
       context: .
       dockerfile: PPE-Dockerfile
-    container_name: ppe-dashboard
+    container_name: ppe-backend
     restart: unless-stopped
     volumes:
       - ./logging.db:/app/logging.db
-      - ./foto:/app/foto
+      - ./data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
-      - APP_BASE_URL=/ppe
+      - FRONTEND_ORIGIN=http://localhost:8080
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    ports:
+      - "5000:5000"
     deploy:
       resources:
         reservations:
@@ -20,6 +22,21 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    networks:
+      - web
+
+  ppe-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:5000
+    container_name: ppe-frontend
+    restart: unless-stopped
+    depends_on:
+      - ppe-backend
+    ports:
+      - "8080:80"
     networks:
       - web
 

@@ -35,7 +35,7 @@ def copy_data_from_sqlite_to_mysql(sqlite_db_name, mysql_db_name):
 
     # Menutup koneksi SQLite
     sqlite_db.close()
-
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
 if __name__ == "__main__":
     sqlite_db_name = "logging.db"
     mysql_db_name = "ppe"

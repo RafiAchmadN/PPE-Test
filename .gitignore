@@ -1,7 +1,18 @@
 # Runtime app
 logging.db
+logging.db-shm
+logging.db-wal
 data/violations/
 .vscode/
+
+# Dokumen & laporan (bukan bagian dari aplikasi)
+*.docx
+*.pdf
+*.pptx
+*.drawio
+FotoProgressPPE/
+Acuan.png
+HETI.jpeg
 
 # Training data (generated, tidak perlu di-commit)
 data/training/frames/

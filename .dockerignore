@@ -1,0 +1,44 @@
+# Virtual environment — install ulang di dalam container via pip
+.venv/
+venv/
+env/
+
+# Dataset & hasil training — tidak dibutuhkan untuk menjalankan app
+data/training/
+data/videos/
+data/violations/
+ppe_train/
+runs/
+dataset/
+
+# Foto progress & dokumentasi
+FotoProgressPPE/
+
+# Git & IDE
+.git/
+.gitignore
+.claude/
+
+# Dokumen & file presentasi
+*.docx
+*.pptx
+*.pdf
+*.drawio
+
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Log & database (di-mount sebagai volume, bukan di-copy)
+logging.db
+logging.db-shm
+logging.db-wal
+
+# Workflow scripts (tidak dipakai saat runtime)
+workflow/
+
+# File temporary
+*.tmp
+*.log
