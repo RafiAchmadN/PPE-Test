@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ppe-model-pv
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadOnlyMany
+  hostPath:
+    path: /mnt/d/models/ppe   # TODO: sesuaikan dengan lokasi asli file .pt di WSL
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ppe-model-pvc
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 1Gi
+  volumeName: ppe-model-pv
+  storageClassName: ""

@@ -20,6 +20,7 @@ export default function Settings() {
   const [pwCurrent, setPwCurrent] = useState('');
   const [pwNew, setPwNew] = useState('');
   const [pwMsg, setPwMsg] = useState(null);
+  const [settingsErr, setSettingsErr] = useState('');
 
   useEffect(() => {
     api.getSettings().then(setSettings);
@@ -34,9 +35,14 @@ export default function Settings() {
   }
 
   async function handleSaveSettings() {
-    await api.updateSettings(settings);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    setSettingsErr('');
+    try {
+      await api.updateSettings(settings);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setSettingsErr(err.message || 'Gagal menyimpan settings');
+    }
   }
 
   async function handleChangePassword() {
@@ -130,6 +136,7 @@ export default function Settings() {
           Save Settings
         </button>
         <span className={`text-success text-sm transition-opacity ${saved ? 'opacity-100' : 'opacity-0'}`}>Saved!</span>
+        {settingsErr && <span className="text-error text-sm">{settingsErr}</span>}
       </div>
 
       <div className="card bg-base-100 border border-base-300 shadow-sm p-6 mt-5">

@@ -3,6 +3,8 @@ logging.db
 logging.db-shm
 logging.db-wal
 data/violations/
+backups/
+proxy/certs/
 .vscode/
 
 # Dokumen & laporan (bukan bagian dari aplikasi)

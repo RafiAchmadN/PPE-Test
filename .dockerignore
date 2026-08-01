@@ -35,6 +35,7 @@ __pycache__/
 logging.db
 logging.db-shm
 logging.db-wal
+backups/
 
 # Workflow scripts (tidak dipakai saat runtime)
 workflow/

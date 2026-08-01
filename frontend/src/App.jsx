@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import Sidebar from './components/Sidebar';
 import Topbar from './components/Topbar';
 import Login from './pages/Login';
+import ForcePasswordChange from './pages/ForcePasswordChange';
 import Dashboard from './pages/Dashboard';
 import LiveCameras from './pages/LiveCameras';
 import CameraManagement from './pages/CameraManagement';
@@ -18,9 +19,10 @@ function FullScreenSpinner() {
 }
 
 function ProtectedLayout() {
-  const { status } = useAuth();
+  const { status, mustChangePassword } = useAuth();
   if (status === 'loading') return <FullScreenSpinner />;
   if (status === 'guest') return <Navigate to="/login" replace />;
+  if (mustChangePassword) return <ForcePasswordChange />;
   return (
     <div className="flex h-screen overflow-hidden bg-base-200">
       <Sidebar />

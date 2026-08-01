@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ppe-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ppe
+  template:
+    metadata:
+      labels:
+        app: ppe
+    spec:
+      containers:
+      - name: ppe-app
+        image: ppe-app:latest
+        imagePullPolicy: Never   # penting: pakai image lokal hasil "k3d image import"
+        ports:
+        - containerPort: 5000   # TODO: sesuaikan dengan EXPOSE port di Dockerfile
+        volumeMounts:
+        - name: model-volume
+          mountPath: /app/models   # TODO: sesuaikan dengan path model yang dibaca kode Flask
+      volumes:
+      - name: model-volume
+        persistentVolumeClaim:
+          claimName: ppe-model-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ppe-svc
+spec:
+  selector:
+    app: ppe
+  ports:
+  - port: 80
+    targetPort: 5000   # TODO: samakan dengan containerPort di atas

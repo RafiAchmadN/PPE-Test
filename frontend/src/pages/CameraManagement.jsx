@@ -40,6 +40,17 @@ export default function CameraManagement() {
     load();
   }
 
+  async function handleEditClick(cam) {
+    try {
+      // List menyamarkan kredensial di URL — ambil detail lengkap dulu supaya
+      // form edit tidak menimpa URL asli dengan string tersamar saat disimpan.
+      const full = await api.getCamera(cam.id);
+      setEditing(full);
+    } catch {
+      setEditing(cam);
+    }
+  }
+
   function handleUseUploadedVideo(path) {
     setUploading(false);
     setEditing({ name: 'Video Test', url: path, enabled: 1 });
@@ -114,7 +125,7 @@ export default function CameraManagement() {
                     <td className="font-mono-app text-xs">{c.fps || 0}</td>
                     <td>
                       <div className="flex gap-1.5">
-                        <button type="button" className="btn btn-ghost btn-xs" onClick={() => setEditing(c)}>
+                        <button type="button" className="btn btn-ghost btn-xs" onClick={() => handleEditClick(c)}>
                           Edit
                         </button>
                         <button type="button" className="btn btn-error btn-soft btn-xs" onClick={() => handleDelete(c)}>

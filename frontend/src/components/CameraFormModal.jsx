@@ -13,6 +13,7 @@ export default function CameraFormModal({ camera, onClose, onSave }) {
   const [url, setUrl] = useState(camera?.url || '');
   const [enabled, setEnabled] = useState(camera ? (camera.enabled ? '1' : '0') : '1');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
   function fillRtsp(brand) {
     const useIp = ip.trim() || '192.168.1.x';
@@ -33,8 +34,11 @@ export default function CameraFormModal({ camera, onClose, onSave }) {
 
   async function handleSave() {
     setSaving(true);
+    setError('');
     try {
       await onSave({ name, url, enabled: parseInt(enabled, 10) });
+    } catch (err) {
+      setError(err.message || 'Gagal menyimpan kamera');
     } finally {
       setSaving(false);
     }
@@ -126,6 +130,8 @@ export default function CameraFormModal({ camera, onClose, onSave }) {
             </select>
           </div>
         </div>
+
+        {error && <div className="text-error text-sm mt-3">{error}</div>}
 
         <div className="modal-action">
           <button type="button" className="btn btn-ghost" onClick={onClose}>

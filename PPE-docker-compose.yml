@@ -8,13 +8,16 @@ services:
     volumes:
       - ./logging.db:/app/logging.db
       - ./data:/app/data
+      - ./backups:/app/backups   # arahkan ke disk sekunder/NAS untuk keamanan ekstra
     environment:
       - PYTHONUNBUFFERED=1
-      - FRONTEND_ORIGIN=http://localhost:8080
+      - FRONTEND_ORIGIN=https://localhost:8443
+      - SESSION_COOKIE_SECURE=1        # aman karena proxy sudah menyediakan HTTPS
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    ports:
-      - "5000:5000"
+      # - DEMO_MODE=1                  # aktifkan HANYA di instance demo publik terpisah (lihat docs/SAAS_READINESS_AUDIT.md §8)
+      # - SECRET_KEY=ganti-dengan-random-string-panjang   (opsional — default sudah auto-generate & persist di DB)
+    # Tidak publish port ke host — hanya bisa diakses lewat ppe-proxy (TLS).
     deploy:
       resources:
         reservations:
@@ -30,16 +33,32 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: http://localhost:5000
+        VITE_API_URL: https://localhost:5443
     container_name: ppe-frontend
     restart: unless-stopped
     depends_on:
       - ppe-backend
+    # Tidak publish port ke host — hanya bisa diakses lewat ppe-proxy (TLS).
+    networks:
+      - web
+
+  ppe-proxy:
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    container_name: ppe-proxy
+    restart: unless-stopped
+    depends_on:
+      - ppe-backend
+      - ppe-frontend
+    volumes:
+      - ./proxy/certs:/etc/nginx/certs:ro
     ports:
-      - "8080:80"
+      - "8443:8443"   # Dashboard (frontend) — https://localhost:8443
+      - "5443:5443"   # API/stream (backend)  — https://localhost:5443
     networks:
       - web
 
 networks:
   web:
-    external: true
+    driver: bridge

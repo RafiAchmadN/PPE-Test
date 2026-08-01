@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: homelab-ingress
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /ppe
+        pathType: Prefix
+        backend:
+          service:
+            name: ppe-svc
+            port:
+              number: 80
+      # Contoh path lain yang sudah pernah dibuat (nginx test) — hapus kalau tidak dipakai lagi
+      # - path: /
+      #   pathType: Prefix
+      #   backend:
+      #     service:
+      #       name: nginx-svc
+      #       port:
+      #         number: 80

@@ -52,7 +52,11 @@ export const changePassword = (current, newPw) =>
 export const getInfo = () => get('/api/info');
 
 // ─── Cameras ───────────────────────────────────────────────────────────────
+// getCameras() menyamarkan kredensial di URL — dipakai untuk tampilan list.
+// getCamera(id) mengembalikan URL lengkap (termasuk kredensial) — dipakai
+// saat membuka form edit supaya nilai lama tidak tertimpa string tersamar.
 export const getCameras = () => get('/api/cameras');
+export const getCamera = (id) => get(`/api/cameras/${id}`);
 export const createCamera = (cam) => post('/api/cameras', cam);
 export const updateCamera = (id, cam) => put(`/api/cameras/${id}`, cam);
 export const deleteCamera = (id) => del(`/api/cameras/${id}`);

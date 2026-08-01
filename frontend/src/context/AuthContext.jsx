@@ -6,13 +6,16 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   // 'loading' | 'authed' | 'guest'
   const [status, setStatus] = useState('loading');
+  const [mustChangePassword, setMustChangePassword] = useState(false);
 
   const checkAuth = useCallback(async () => {
     try {
       const r = await api.authStatus();
       setStatus(r?.logged_in ? 'authed' : 'guest');
+      setMustChangePassword(!!r?.must_change_password);
     } catch {
       setStatus('guest');
+      setMustChangePassword(false);
     }
   }, []);
 
@@ -23,7 +26,7 @@ export function AuthProvider({ children }) {
 
   async function doLogin(username, password) {
     await api.login(username, password);
-    setStatus('authed');
+    await checkAuth();
   }
 
   async function doLogout() {
@@ -31,11 +34,12 @@ export function AuthProvider({ children }) {
       await api.logout();
     } finally {
       setStatus('guest');
+      setMustChangePassword(false);
     }
   }
 
   return (
-    <AuthContext.Provider value={{ status, login: doLogin, logout: doLogout }}>
+    <AuthContext.Provider value={{ status, mustChangePassword, login: doLogin, logout: doLogout, refresh: checkAuth }}>
       {children}
     </AuthContext.Provider>
   );

@@ -171,47 +171,64 @@ git clone https://github.com/RafiAchmadN/PPE-Test.git
 cd PPE-Test
 ```
 
-### 2. Jalankan dengan Docker (Direkomendasikan)
-Backend (Flask API) dan frontend (React) adalah dua service terpisah — lihat
-[Arsitektur Sistem](#arsitektur-sistem).
+### 2. Generate Sertifikat TLS (sekali saja)
+Backend, frontend, dan proxy TLS-terminating (`ppe-proxy`) adalah tiga service
+terpisah — lihat [Arsitektur Sistem](#arsitektur-sistem). Proxy butuh
+sertifikat sebelum container pertama kali dijalankan:
 
+```bash
+bash scripts/generate-self-signed-cert.sh
+```
+
+> Ini membuat sertifikat **self-signed** (hanya untuk testing/LAN — browser
+> akan menampilkan peringatan "Not Secure"). Untuk produksi/demo publik, timpa
+> `proxy/certs/cert.pem` + `key.pem` dengan sertifikat asli (Let's Encrypt/CA
+> internal) — tidak perlu ubah konfigurasi lain.
+
+### 3. Jalankan dengan Docker (Direkomendasikan)
 ```bash
 # Build image (pertama kali, butuh ~10-15 menit download PyTorch cu128)
 docker compose -f PPE-docker-compose.yml build
 
-# Jalankan kedua container (backend :5000, frontend :8080)
+# Jalankan semua container (backend & frontend tidak lagi publish port host —
+# satu-satunya jalan masuk dari luar adalah lewat ppe-proxy)
 docker compose -f PPE-docker-compose.yml up -d
 
 # Cek status
 docker compose -f PPE-docker-compose.yml logs -f
 ```
 
-### 3. Akses Dashboard
-Buka browser: `http://localhost:8080`
+### 4. Akses Dashboard
+Buka browser: `https://localhost:8443` (terima peringatan sertifikat
+self-signed di browser — sekali saja per browser).
 
-**Login default:**
-- Username: `admin`
-- Password: `admin123`
+**Login pertama kali wajib ganti password default** (`admin` / lihat pesan di
+log startup container) — dashboard akan otomatis meminta ganti password
+sebelum bisa mengakses fitur lain.
 
-### 4. Update Setelah Pull
+### 5. Update Setelah Pull
 ```bash
 git pull
 docker compose -f PPE-docker-compose.yml build   # tanpa --no-cache (reuse layer PyTorch)
 docker compose -f PPE-docker-compose.yml up -d
 ```
 
-### 5. Jalankan Manual untuk Development (tanpa Docker)
+### 6. Jalankan Manual untuk Development (tanpa Docker)
 ```bash
 # Terminal 1 — backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python app_web.py                 # http://localhost:5000
+DEV_SERVER=1 python app_web.py    # http://localhost:5000 (dev server Werkzeug, BUKAN untuk produksi)
 
 # Terminal 2 — frontend
 cd frontend
 npm install
 npm run dev                       # http://localhost:5173 (proxy ke backend via VITE_API_URL)
 ```
+> Tanpa `DEV_SERVER=1`, `app_web.py` akan mencoba menjalankan **waitress**
+> (WSGI server produksi) — install dulu lewat `pip install -r requirements.txt`.
+> Untuk iterasi cepat di localhost, dev server Werkzeug (`DEV_SERVER=1`) lebih
+> praktis; JANGAN pakai `DEV_SERVER=1` untuk deployment ke pelanggan.
 
 ---
 
@@ -222,16 +239,20 @@ npm run dev                       # http://localhost:5173 (proxy ke backend via 
 **Backend** (`PPE-docker-compose.yml` → service `ppe-backend`):
 ```yaml
 environment:
-  - FRONTEND_ORIGIN=http://localhost:8080  # Origin frontend yang diizinkan CORS (pisahkan koma jika >1)
+  - FRONTEND_ORIGIN=https://localhost:8443  # Origin frontend (lewat proxy) yang diizinkan CORS
+  - SESSION_COOKIE_SECURE=1                 # Aman karena proxy sudah menyediakan HTTPS
   - PYTHONUNBUFFERED=1
   - NVIDIA_VISIBLE_DEVICES=all              # GPU visibility
-  # - SECRET_KEY=ganti-dengan-random-string-panjang   (opsional, production)
-  # - SESSION_COOKIE_SECURE=1                          (wajib jika akses via HTTPS)
+  # - SECRET_KEY=ganti-dengan-random-string-panjang   (opsional — default sudah auto-generate & persist di DB)
+  # - DEMO_MODE=1             # HANYA di instance demo publik terpisah — lihat docs/SAAS_READINESS_AUDIT.md §8
+  # - WEB_THREADS=32          # jumlah thread waitress — naikkan jika banyak viewer MJPEG bersamaan
+  # - BACKUP_RETENTION_DAYS=14
+  # - MAX_UPLOAD_MB=500
 ```
 
 **Frontend** (`frontend/.env` atau build arg `VITE_API_URL` di `PPE-docker-compose.yml`):
 ```env
-VITE_API_URL=http://localhost:5000   # Base URL backend yang bisa diakses browser
+VITE_API_URL=https://localhost:5443   # Base URL backend (lewat proxy) yang bisa diakses browser
 ```
 > `VITE_API_URL` di-*bake* ke bundle JS saat `npm run build` — kalau backend diakses lewat
 > domain/IP lain, set env var ini sebelum build ulang frontend.
@@ -241,6 +262,7 @@ VITE_API_URL=http://localhost:5000   # Base URL backend yang bisa diakses browse
 volumes:
   - ./logging.db:/app/logging.db     # Database SQLite
   - ./data:/app/data                 # Violations snapshots & video upload
+  - ./backups:/app/backups           # Snapshot backup harian logging.db — arahkan ke disk sekunder/NAS
 ```
 
 ### Pengaturan Deteksi (via Dashboard Settings)
@@ -274,32 +296,36 @@ volumes:
 - Menu **Logs** → filter tanggal → lihat riwayat + snapshot
 
 ### Mengubah Password Admin
-Menu **Settings** → **Change Password** → isi password baru
+Menu **Settings** → **Change Password** → isi password baru. Login pertama
+kali (password masih default) akan otomatis diarahkan ke layar ganti password
+sebelum bisa mengakses menu lain.
 
 ---
 
 ## API Reference
 
-Backend (`http://localhost:5000`) adalah JSON API murni — semua endpoint `/api/*`
-memerlukan autentikasi (session cookie, credentials cross-origin lewat CORS).
+Backend (`https://localhost:5443` lewat proxy) adalah JSON API murni — semua
+endpoint `/api/*` memerlukan autentikasi (session cookie, credentials
+cross-origin lewat CORS).
 
 ### Autentikasi
 ```http
 POST /api/auth/login
 Content-Type: application/json
-{"username": "admin", "password": "admin123"}
+{"username": "admin", "password": "<password admin>"}
 
 POST /api/auth/logout
-GET  /api/auth/status                # {"logged_in": true|false}
-POST /api/auth/change-password       # {"current": "...", "new": "..."}
+GET  /api/auth/status                # {"logged_in", "must_change_password", "demo_mode"}
+POST /api/auth/change-password       # {"current": "...", "new": "..."} — dinonaktifkan saat DEMO_MODE
 ```
 
 ### Kamera
 ```http
-GET    /api/cameras                  # List semua kamera + status online/fps
-POST   /api/cameras                  # Tambah kamera baru
-PUT    /api/cameras/<id>             # Update kamera
-DELETE /api/cameras/<id>             # Hapus kamera
+GET    /api/cameras                  # List kamera + status online/fps — URL disamarkan (kredensial disembunyikan)
+GET    /api/cameras/<id>             # Detail 1 kamera dengan URL lengkap (dipakai form edit)
+POST   /api/cameras                  # Tambah kamera baru — dinonaktifkan saat DEMO_MODE
+PUT    /api/cameras/<id>             # Update kamera — dinonaktifkan saat DEMO_MODE
+DELETE /api/cameras/<id>             # Hapus kamera — dinonaktifkan saat DEMO_MODE
 POST   /api/cameras/visible          # {"ids":[1,2]} kamera yang tertampil di frontend saat ini
                                       # (membatasi YOLO inference — kirim {"ids":null} untuk lepas batas)
 ```
@@ -402,11 +428,20 @@ PPE-Test/
 ├── app_web.py              # Backend Flask — JSON API murni (CORS + session)
 ├── best.pt                 # Bobot model YOLOv11m terlatih
 ├── PPE-Dockerfile          # Docker image backend (CUDA 12.8 + PyTorch cu128)
-├── PPE-docker-compose.yml  # Docker Compose — service ppe-backend + ppe-frontend
+├── PPE-docker-compose.yml  # Docker Compose — service ppe-backend + ppe-frontend + ppe-proxy
 ├── requirements.txt        # Python dependencies
 ├── exportdb.py             # Utilitas ekspor database ke Excel/CSV
 ├── logging.db              # Database SQLite (auto-generated)
+├── backups/                # Snapshot backup harian logging.db (auto-generated)
 ├── static/                 # Aset dilayani langsung Flask (logo HETI, dll)
+├── proxy/                  # Reverse proxy TLS-terminating (nginx) — satu-satunya entrypoint publik
+│   ├── Dockerfile
+│   ├── nginx.conf
+│   └── certs/               # cert.pem + key.pem (generate via scripts/, tidak di-commit)
+├── scripts/
+│   └── generate-self-signed-cert.sh   # Bikin sertifikat TLS untuk testing/LAN
+├── docs/
+│   └── SAAS_READINESS_AUDIT.md        # Audit kesiapan komersialisasi + roadmap
 ├── frontend/                # Frontend React + Tailwind + daisyUI (service terpisah)
 │   ├── Dockerfile           # Multi-stage build → nginx
 │   ├── nginx.conf           # SPA fallback routing
@@ -415,10 +450,10 @@ PPE-Test/
 │   └── src/
 │       ├── App.jsx          # Routing (react-router-dom)
 │       ├── lib/api.js       # Klien fetch ke backend
-│       ├── context/         # AuthContext (status login)
+│       ├── context/         # AuthContext (status login + must_change_password)
 │       ├── hooks/           # useVisibleCameras (sinkron kamera aktif ↔ YOLO)
 │       ├── components/      # Sidebar, Topbar, StatCard, ComplianceMeter, dll
-│       └── pages/           # Dashboard, LiveCameras, CameraManagement, Logs, Settings
+│       └── pages/           # Dashboard, LiveCameras, CameraManagement, Logs, Settings, ForcePasswordChange
 ├── data/
 │   ├── violations/         # Snapshot JPEG pelanggaran
 │   └── videos/             # File video untuk testing

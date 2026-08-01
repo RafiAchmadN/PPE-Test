@@ -23,6 +23,8 @@ import cv2
 import numpy as np
 from flask import Flask, request, jsonify, Response, send_from_directory, session
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
 
 try:
@@ -44,10 +46,21 @@ BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 DATABASE_PATH = os.path.join(BASE_DIR, 'logging.db')
 OUTPUT_FOLDER = os.path.join(BASE_DIR, 'data', 'violations')
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'data', 'videos')
+BACKUP_FOLDER = os.path.join(BASE_DIR, 'backups')
 INFERENCE_SIZE       = (640, 480)
 ALLOWED_VIDEO_EXTS   = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v'}
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(BACKUP_FOLDER, exist_ok=True)
+
+# Mode demo/preview publik (lihat docs/SAAS_READINESS_AUDIT.md §8): auto-login
+# semua pengunjung sebagai guest, nonaktifkan endpoint yang mengubah state
+# (kamera/video/password/settings), dan batasi sumber kamera hanya ke file
+# video lokal (cegah SSRF lewat URL RTSP/HTTP bebas dari publik anonim).
+DEMO_MODE = os.environ.get('DEMO_MODE', '0') == '1'
+
+# Batas upload — cegah disk penuh akibat upload berulang tanpa batas.
+MAX_UPLOAD_MB = int(os.environ.get('MAX_UPLOAD_MB', '500'))
 
 # Frontend React (Vite) berjalan sebagai service terpisah — lihat frontend/.
 # Boleh diisi banyak origin dipisah koma lewat env var untuk deployment lain.
@@ -58,7 +71,19 @@ app.secret_key = os.environ.get('SECRET_KEY', 'ppe-monitor-default-change-me-202
 # credentials (cookie sesi) harus ikut terkirim dari origin frontend yang berbeda port/domain
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '0') == '1'
+app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_MB * 1024 * 1024
 CORS(app, supports_credentials=True, origins=FRONTEND_ORIGINS)
+
+# Rate limiting — selalu aktif untuk login (cegah brute force), dan jauh lebih
+# ketat secara global saat DEMO_MODE (pengunjung publik anonim, bukan staf
+# terpercaya) supaya satu pengunjung tidak bisa menghabiskan resource GPU/
+# bandwidth demo untuk semua calon pelanggan lain.
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    storage_uri="memory://",
+    default_limits=(["60 per minute"] if DEMO_MODE else []),
+)
 
 def login_required(f):
     @wraps(f)
@@ -67,6 +92,22 @@ def login_required(f):
             return jsonify({'error': 'Unauthorized'}), 401
         return f(*args, **kwargs)
     return decorated
+
+def demo_readonly(f):
+    """Blokir endpoint yang mengubah state saat DEMO_MODE aktif — demo publik
+    hanya boleh dilihat-lihat, tidak boleh diubah oleh pengunjung anonim."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if DEMO_MODE:
+            return jsonify({'error': 'Dinonaktifkan di mode demo'}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+@app.before_request
+def _demo_auto_login():
+    if DEMO_MODE and not session.get('logged_in'):
+        session['logged_in'] = True
+        session['demo_guest'] = True
 
 def get_local_ip():
     try:
@@ -112,12 +153,93 @@ def db_execute(query, params=(), fetch=False, fetchone=False):
         conn.close()
 
 RETENTION_DAYS = 30  # hapus data lebih lama dari N hari (0 = tidak hapus)
+BACKUP_RETENTION_DAYS = int(os.environ.get('BACKUP_RETENTION_DAYS', '14'))
+
+def _get_must_change_password():
+    row = db_execute("SELECT value FROM app_settings WHERE key='must_change_password'", fetchone=True)
+    return bool(row) and row['value'] == '1'
+
+def _mask_url(url):
+    """Sembunyikan kredensial (user:pass@) dari URL kamera untuk response list.
+    Kredensial lengkap hanya dikirim lewat GET /api/cameras/<id> (dipakai form edit)."""
+    try:
+        parsed = urlparse(url)
+        if parsed.username or parsed.password:
+            netloc = parsed.hostname or ''
+            if parsed.port:
+                netloc += f':{parsed.port}'
+            return parsed._replace(netloc=f'***:***@{netloc}').geturl()
+    except Exception:
+        pass
+    return url
+
+def _backup_worker():
+    """Backup harian logging.db lewat SQLite backup API (aman dijalankan
+    bersamaan dengan WAL). Retensi backup terpisah dari retensi data live —
+    lihat docs/SAAS_READINESS_AUDIT.md §3/§7. Snapshot media (data/violations)
+    sebaiknya dibackup di level OS (rsync/robocopy) karena hanya kumpulan file
+    statis, tidak butuh penanganan konsistensi khusus seperti database."""
+    last_backup_date = None
+    while True:
+        try:
+            today_str = date.today().isoformat()
+            if last_backup_date != today_str:
+                dest = os.path.join(BACKUP_FOLDER, f'logging_{today_str}.db')
+                if not os.path.exists(dest):
+                    src_conn = sqlite3.connect(DATABASE_PATH)
+                    dst_conn = sqlite3.connect(dest)
+                    with dst_conn:
+                        src_conn.backup(dst_conn)
+                    src_conn.close()
+                    dst_conn.close()
+                    print(f"[BACKUP] Snapshot dibuat: {dest}")
+                last_backup_date = today_str
+
+                if BACKUP_RETENTION_DAYS > 0:
+                    cutoff = (datetime.now() - __import__('datetime').timedelta(days=BACKUP_RETENTION_DAYS)).date()
+                    for fname in os.listdir(BACKUP_FOLDER):
+                        if fname.startswith('logging_') and fname.endswith('.db'):
+                            try:
+                                fdate = date.fromisoformat(fname[len('logging_'):-len('.db')])
+                                if fdate < cutoff:
+                                    os.remove(os.path.join(BACKUP_FOLDER, fname))
+                                    print(f"[BACKUP] Hapus backup lama: {fname}")
+                            except ValueError:
+                                pass
+        except Exception as e:
+            print(f"[BACKUP] Error: {e}")
+        time.sleep(3600)  # cek tiap jam — backup sungguhan hanya jalan 1x/hari (guard di atas)
 
 def _violation_writer():
-    """Thread khusus menulis violations ke DB — camera thread tidak perlu tunggu DB."""
+    """Thread khusus menulis violations ke DB — camera thread tidak perlu tunggu DB.
+
+    Retensi dijalankan berbasis WAKTU (maks. 1x/hari), bukan hitungan insert —
+    supaya site dengan volume pelanggaran rendah tetap ter-cleanup. Setiap
+    baris yang dihapus, file JPEG buktinya ikut dihapus (sebelumnya hanya
+    baris DB yang terhapus, file menumpuk terus di disk).
+    """
     conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
-    cleanup_counter = 0
+    last_cleanup_date = None
+
+    def run_retention_cleanup():
+        cutoff = (datetime.now() - __import__('datetime').timedelta(days=RETENTION_DAYS)).strftime('%Y-%m-%d')
+        rows = conn.execute("SELECT Bukti FROM data WHERE Tanggal < ?", (cutoff,)).fetchall()
+        if not rows:
+            return
+        deleted = conn.execute("DELETE FROM data WHERE Tanggal < ?", (cutoff,)).rowcount
+        conn.commit()
+        for (bukti,) in rows:
+            if not bukti:
+                continue
+            fpath = os.path.join(OUTPUT_FOLDER, bukti)
+            try:
+                if os.path.isfile(fpath):
+                    os.remove(fpath)
+            except Exception as e:
+                print(f"[CLEANUP] Gagal hapus file {bukti}: {e}")
+        print(f"[CLEANUP] Hapus {deleted:,} record + file bukti terkait, lebih lama dari {cutoff}")
+
     while True:
         try:
             item = _violation_queue.get(timeout=1)
@@ -126,25 +248,24 @@ def _violation_writer():
                 item
             )
             conn.commit()
-
-            # Jalankan cleanup setiap 1000 record baru (bukan tiap insert agar tidak lambat)
-            cleanup_counter += 1
-            if RETENTION_DAYS > 0 and cleanup_counter >= 1000:
-                cleanup_counter = 0
-                cutoff = (datetime.now() - __import__('datetime').timedelta(days=RETENTION_DAYS)).strftime('%Y-%m-%d')
-                deleted = conn.execute("DELETE FROM data WHERE Tanggal < ?", (cutoff,)).rowcount
-                conn.commit()
-                if deleted:
-                    print(f"[CLEANUP] Hapus {deleted:,} records lebih lama dari {cutoff}")
             _violation_queue.task_done()
         except queue.Empty:
-            continue
+            pass
         except Exception as e:
             print(f"[DB WRITER] {e}")
             try: conn.close()
             except: pass
             conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False, timeout=10)
             conn.execute("PRAGMA journal_mode=WAL")
+            continue
+
+        today_str = date.today().isoformat()
+        if RETENTION_DAYS > 0 and last_cleanup_date != today_str:
+            last_cleanup_date = today_str
+            try:
+                run_retention_cleanup()
+            except Exception as e:
+                print(f"[CLEANUP] Error: {e}")
 
 def init_db():
     conn = get_db()
@@ -183,12 +304,22 @@ def init_db():
     else:
         app.secret_key = row[0]
 
-    # Default admin password: admin123
+    # Default admin password: admin123 — wajib diganti di login pertama (must_change_password)
     row = conn.execute("SELECT value FROM app_settings WHERE key='admin_pw_hash'").fetchone()
     if not row:
         conn.execute("INSERT INTO app_settings (key,value) VALUES ('admin_pw_hash',?)",
                      (generate_password_hash('admin123'),))
+        conn.execute("INSERT OR REPLACE INTO app_settings (key,value) VALUES ('must_change_password','1')")
         conn.commit()
+    else:
+        # Migrasi instance lama: paksa ganti password kalau ternyata masih memakai
+        # default admin123 (instance yang sudah diganti passwordnya tidak diganggu).
+        mcp_row = conn.execute("SELECT value FROM app_settings WHERE key='must_change_password'").fetchone()
+        if mcp_row is None:
+            still_default = check_password_hash(row['value'], 'admin123')
+            conn.execute("INSERT OR REPLACE INTO app_settings (key,value) VALUES ('must_change_password',?)",
+                         ('1' if still_default else '0',))
+            conn.commit()
 
     # Load saved settings
     for row in conn.execute("SELECT key, value FROM app_settings").fetchall():
@@ -518,6 +649,15 @@ class CameraStream:
 
     def start(self):
         if self.active: return
+        # Pertahanan berlapis: walau endpoint tambah/ubah kamera sudah diblokir
+        # di DEMO_MODE (lihat demo_readonly), cek ulang di sini supaya kamera
+        # manapun di DB yang bukan file video lokal tidak pernah benar-benar
+        # dijalankan saat demo publik aktif — mencegah SSRF lewat RTSP/HTTP/
+        # webcam bebas dari pengunjung anonim.
+        if DEMO_MODE and not self._is_demo_safe_url(self.url):
+            self.error_msg = "URL tidak diizinkan di mode demo (hanya video contoh yang tersedia)"
+            print(f"[CAM {self.cam_id}] Diblokir mode demo: {self.url}")
+            return
         self.active = True
         # Pilih loop sesuai protokol URL
         if self.url.lower().startswith("dvrip://"):
@@ -531,6 +671,26 @@ class CameraStream:
     def stop(self):
         self.active = False
         print(f"[CAM {self.cam_id}] Stopped: {self.name}")
+
+    @staticmethod
+    def _is_demo_safe_url(url):
+        """Mode demo hanya boleh memutar file video lokal di data/videos —
+        blokir RTSP/HTTP/RTMP/DVRIP/webcam index sepenuhnya."""
+        if not isinstance(url, str):
+            return False
+        if url.lower().startswith(('rtsp://', 'http://', 'https://', 'rtmp://', 'mms://', 'dvrip://')):
+            return False
+        if url.isdigit():
+            return False
+        resolved, _ = CameraStream._resolve_url(url)
+        if not isinstance(resolved, str) or not os.path.isfile(resolved):
+            return False
+        try:
+            real_upload = os.path.realpath(UPLOAD_FOLDER)
+            real_target = os.path.realpath(resolved)
+            return os.path.commonpath([real_upload, real_target]) == real_upload
+        except ValueError:
+            return False
 
     @staticmethod
     def _resolve_url(url):
@@ -906,6 +1066,7 @@ def restart_camera(cid):
 # ─── FLASK ROUTES (JSON API murni — frontend React terpisah) ─────────────────
 
 @app.route('/api/auth/login', methods=['POST'])
+@limiter.limit("10 per minute")
 def login_post():
     d = request.json or {}
     username = d.get('username', '').strip()
@@ -926,7 +1087,12 @@ def logout():
 
 @app.route('/api/auth/status')
 def auth_status():
-    return jsonify({'logged_in': bool(session.get('logged_in'))})
+    logged_in = bool(session.get('logged_in'))
+    return jsonify({
+        'logged_in': logged_in,
+        'must_change_password': _get_must_change_password() if (logged_in and not DEMO_MODE) else False,
+        'demo_mode': DEMO_MODE,
+    })
 
 @app.route('/foto/<path:filename>')
 @login_required
@@ -941,6 +1107,7 @@ def api_info():
 
 @app.route('/api/auth/change-password', methods=['POST'])
 @login_required
+@demo_readonly
 def change_password():
     d = request.json or {}
     current = d.get('current', '')
@@ -952,14 +1119,18 @@ def change_password():
         return jsonify({'error': 'Password baru minimal 6 karakter'}), 400
     db_execute("INSERT OR REPLACE INTO app_settings (key,value) VALUES ('admin_pw_hash',?)",
                (generate_password_hash(new_pw),))
+    db_execute("INSERT OR REPLACE INTO app_settings (key,value) VALUES ('must_change_password','0')")
     return jsonify({'ok': True})
 
 # Camera CRUD
 @app.route('/api/cameras', methods=['GET'])
 @login_required
 def api_cameras_list():
+    """List kamera — URL disamarkan (kredensial disembunyikan). Untuk URL
+    lengkap saat edit, frontend memanggil GET /api/cameras/<id>."""
     rows = db_execute("SELECT * FROM cameras ORDER BY id", fetch=True)
     for c in rows:
+        c['url'] = _mask_url(c['url'])
         cs = camera_streams.get(c['id'])
         if cs:
             info = cs.get_info()
@@ -970,8 +1141,20 @@ def api_cameras_list():
             c['online'] = False; c['fps'] = 0; c['error'] = 'Not started'
     return jsonify(rows)
 
+@app.route('/api/cameras/<int:cid>', methods=['GET'])
+@login_required
+def api_cameras_get(cid):
+    """Detail 1 kamera dengan URL lengkap (termasuk kredensial) — dipakai
+    form edit di frontend, berbeda dari GET /api/cameras (list) yang
+    menyamarkan kredensial."""
+    row = db_execute("SELECT * FROM cameras WHERE id=?", (cid,), fetchone=True)
+    if not row:
+        return jsonify({'error': 'Kamera tidak ditemukan'}), 404
+    return jsonify(row)
+
 @app.route('/api/cameras', methods=['POST'])
 @login_required
+@demo_readonly
 def api_cameras_create():
     d = request.json
     name = d.get('name','').strip(); url = d.get('url','').strip()
@@ -983,6 +1166,7 @@ def api_cameras_create():
 
 @app.route('/api/cameras/<int:cid>', methods=['PUT'])
 @login_required
+@demo_readonly
 def api_cameras_update(cid):
     d = request.json
     name = d.get('name','').strip(); url = d.get('url','').strip(); enabled = d.get('enabled', 1)
@@ -994,6 +1178,7 @@ def api_cameras_update(cid):
 
 @app.route('/api/cameras/<int:cid>', methods=['DELETE'])
 @login_required
+@demo_readonly
 def api_cameras_delete(cid):
     stop_camera(cid)
     db_execute("DELETE FROM cameras WHERE id=?", (cid,))
@@ -1040,6 +1225,7 @@ def api_videos_list():
 
 @app.route('/api/videos/upload', methods=['POST'])
 @login_required
+@demo_readonly
 def api_videos_upload():
     """Upload satu file video. Response berisi path absolute yang bisa dipakai sebagai URL kamera."""
     if 'file' not in request.files:
@@ -1071,6 +1257,7 @@ def api_videos_upload():
 
 @app.route('/api/videos/<path:filename>', methods=['DELETE'])
 @login_required
+@demo_readonly
 def api_videos_delete(filename):
     """Hapus file video upload."""
     safe = os.path.basename(filename)  # cegah path traversal
@@ -1138,6 +1325,7 @@ def api_settings_get():
 
 @app.route('/api/settings', methods=['PUT'])
 @login_required
+@demo_readonly
 def api_settings_update():
     d = request.json
     for k in ['violation_delay', 'confidence', 'person_confidence', 'stream_fps']:
@@ -1158,6 +1346,7 @@ if __name__ == '__main__':
     init_db()
     threading.Thread(target=load_model, daemon=True).start()
     threading.Thread(target=_violation_writer, daemon=True).start()
+    threading.Thread(target=_backup_worker, daemon=True).start()
     # Inference worker — tambah NUM_WORKERS=2 jika kamera > 20
     NUM_WORKERS = 1
     for _ in range(NUM_WORKERS):
@@ -1168,10 +1357,24 @@ if __name__ == '__main__':
     print("  PPE Monitoring System - Web UI")
     print(f"  Local access    : http://localhost:5000")
     print(f"  Network access  : http://{local_ip}:5000")
-    print(f"  Default login   : admin / admin123")
+    if DEMO_MODE:
+        print(f"  Mode            : DEMO PUBLIK (auto-login guest, edit dinonaktifkan)")
+    else:
+        print(f"  Default login   : admin / (lihat README — wajib diganti di login pertama)")
     print(f"  Violation delay : {settings['violation_delay']}s")
     print(f"  Confidence      : {settings['confidence']}")
     print(f"  Stream FPS cap  : {settings['stream_fps']}")
     print(f"  DVRIP support   : {'YES' if DVRIP_AVAILABLE else 'NO (install python-dvr + av)'}")
     print("=" * 60)
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+
+    if os.environ.get('DEV_SERVER') == '1':
+        # Werkzeug dev server — HANYA untuk development lokal cepat, bukan produksi
+        # (single-threaded per-request overhead lebih tinggi, tidak dirancang untuk
+        # menahan banyak koneksi MJPEG jangka panjang secara bersamaan).
+        app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    else:
+        from waitress import serve
+        threads = int(os.environ.get('WEB_THREADS', '32'))
+        print(f"  WSGI server     : waitress (threads={threads})")
+        print("=" * 60)
+        serve(app, host='0.0.0.0', port=5000, threads=threads)
