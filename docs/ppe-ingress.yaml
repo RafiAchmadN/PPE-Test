@@ -1,23 +1,44 @@
+# Ingress untuk PPE — SATU host (bukan dua seperti ppe-proxy di Docker Compose),
+# dibedakan lewat path, supaya frontend (SPA) & backend jadi same-origin di mata
+# browser (tidak perlu CORS, cookie sesi otomatis jalan). Lihat penjelasan penuh
+# di percakapan/README.
+#
+# "ppe.127.0.0.1.nip.io" resolve otomatis ke 127.0.0.1 (trik nip.io) — akses
+# lewat port host k3d yang sudah ada (8080 → 80 di cluster, lihat docs/README.md),
+# jadi buka: http://ppe.127.0.0.1.nip.io:8080
+#
+# HTTP saja (belum TLS) — cukup untuk demo LAN/homelab. Untuk HTTPS, langkah
+# lanjutannya pakai cert-manager (belum diimplementasikan di sini).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: homelab-ingress
+  name: ppe-ingress
 spec:
   rules:
-  - http:
-      paths:
-      - path: /ppe
-        pathType: Prefix
-        backend:
-          service:
-            name: ppe-svc
-            port:
-              number: 80
-      # Contoh path lain yang sudah pernah dibuat (nginx test) — hapus kalau tidak dipakai lagi
-      # - path: /
-      #   pathType: Prefix
-      #   backend:
-      #     service:
-      #       name: nginx-svc
-      #       port:
-      #         number: 80
+    - host: ppe.127.0.0.1.nip.io
+      http:
+        paths:
+          # Path spesifik backend dicek lebih dulu (persis rute Flask di app_web.py,
+          # tidak perlu path-rewrite karena tidak ada prefix tambahan).
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: ppe-backend-svc
+                port:
+                  number: 5000
+          - path: /foto
+            pathType: Prefix
+            backend:
+              service:
+                name: ppe-backend-svc
+                port:
+                  number: 5000
+          # Semua path lain (termasuk /assets/... dan route React Router) ke frontend.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ppe-frontend-svc
+                port:
+                  number: 80

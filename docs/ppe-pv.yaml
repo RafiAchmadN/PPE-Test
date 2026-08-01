@@ -1,24 +1,24 @@
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: ppe-model-pv
-spec:
-  capacity:
-    storage: 1Gi
-  accessModes:
-    - ReadOnlyMany
-  hostPath:
-    path: /mnt/d/models/ppe   # TODO: sesuaikan dengan lokasi asli file .pt di WSL
----
+# PersistentVolumeClaim untuk data runtime PPE (logging.db, data/violations,
+# data/videos, backups/) — BUKAN untuk model .pt (model sudah ikut ter-bake ke
+# image Docker lewat "COPY . ." di PPE-Dockerfile, tidak perlu volume terpisah).
+#
+# Konsep: PVC = "permintaan" storage ("saya butuh 5Gi yang bertahan walau pod
+# restart/dijadwalkan ulang"). StorageClass "local-path" (sudah default di
+# cluster k3d-mu, lihat docs/README.md) yang MENYEDIAKAN permintaan itu secara
+# otomatis di balik layar — beda dengan manifest lama yang bikin PersistentVolume
+# manual + hostPath hardcoded (rawan salah path, tidak portable).
+#
+# accessMode ReadWriteOnce karena local-path itu storage lokal per-node
+# (cocok untuk homelab 1 node aktif), bukan storage terdistribusi seperti NFS/
+# Longhorn yang mendukung ReadWriteMany.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: ppe-model-pvc
+  name: ppe-data-pvc
 spec:
   accessModes:
-    - ReadOnlyMany
+    - ReadWriteOnce
+  storageClassName: local-path
   resources:
     requests:
-      storage: 1Gi
-  volumeName: ppe-model-pv
-  storageClassName: ""
+      storage: 5Gi
