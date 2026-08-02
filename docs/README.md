@@ -119,6 +119,48 @@ kubectl rollout restart deployment/ppe-backend deployment/ppe-frontend
 kecuali di-import ulang + pod di-restart manual (`rollout restart`) — beda dengan
 `docker compose up -d --build` yang otomatis recreate container.
 
+## Observability — Prometheus + Grafana (kube-prometheus-stack)
+- Namespace: `monitoring`, terpisah dari `default` tempat PPE app jalan.
+- Values Helm ada di `docs/prometheus-values.yaml` — di-tuning untuk homelab
+  CPU-only 2-node ini (bukan default chart yang berasumsi resource besar):
+  - `kubeControllerManager`/`kubeScheduler`/`kubeProxy`/`kubeEtcd` dimatikan
+    karena k3s menjalankan semuanya di satu proses `k3s server`, bukan
+    Service terpisah yang bisa di-scrape chart — kalau dibiarkan aktif,
+    target-nya permanen "down" tanpa manfaat.
+  - Retensi Prometheus 3 hari, storage `local-path` (4Gi Prometheus, 1Gi
+    masing-masing untuk Alertmanager & Grafana) supaya data selamat dari
+    restart pod, konsisten dengan pola PVC `ppe-data-pvc`.
+  - Resource requests/limits di-set eksplisit dan kecil (default chart tidak
+    membatasi sama sekali) karena WSL2 VM yang menjalankan Docker Desktop
+    cuma ~12 CPU/7.7Gi RAM, dipakai bersama PPE app.
+  - Alertmanager tetap aktif (bukan didisable) — overhead-nya kecil dan
+    relevan untuk belajar stack Prometheus secara utuh.
+
+Install (sekali):
+```bash
+kubectl create namespace monitoring
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update prometheus-community
+helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+  --namespace monitoring --version 88.0.1 -f docs/prometheus-values.yaml
+```
+
+Akses Grafana: `http://grafana.127.0.0.1.nip.io:8080` (subdomain nip.io
+terpisah dari `ppe.127.0.0.1.nip.io`, tapi lewat host port 8080 → Traefik
+yang sama — routing dibedakan lewat header `Host`, tidak perlu port
+tambahan). Diekspos lewat `grafana.ingress.*` bawaan chart, bukan manifest
+Ingress terpisah, supaya otomatis sinkron dengan Service tiap kali upgrade.
+
+Ambil password admin Grafana (auto-generated, user `admin`):
+```bash
+kubectl get secret --namespace monitoring -l app.kubernetes.io/component=admin-secret \
+  -o jsonpath="{.items[0].data.admin-password}" | base64 -d; echo
+```
+
+Dashboard cluster/node (`Kubernetes / Compute Resources / Node (Pods)`,
+`Node Exporter / Nodes`) sudah tersedia otomatis lewat `kube-state-metrics`
++ `node-exporter` + default dashboard chart, tanpa import manual.
+
 ## Yang belum diimplementasikan di sini (next step, bukan tebakan)
 - HTTPS di Ingress (perlu `cert-manager` + kemungkinan port tambahan di k3d)
 - GPU — coba lagi HANYA kalau image node k3d diganti ke base glibc yang didukung
