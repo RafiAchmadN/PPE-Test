@@ -13,6 +13,10 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ppe-ingress
+  annotations:
+    # Perubahan uji-coba untuk memverifikasi loop GitOps ArgoCD: git push ke
+    # Gitea di sini seharusnya ter-apply otomatis tanpa `kubectl apply` manual.
+    gitops.homelab/sync-check: "1"
 spec:
   rules:
     - host: ppe.127.0.0.1.nip.io
