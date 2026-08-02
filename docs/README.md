@@ -119,10 +119,21 @@ kubectl rollout restart deployment/ppe-backend deployment/ppe-frontend
 kecuali di-import ulang + pod di-restart manual (`rollout restart`) — beda dengan
 `docker compose up -d --build` yang otomatis recreate container.
 
+## Platform/infra terpisah dari repo ini
+Config yang sifatnya cluster-wide (bukan spesifik PPE) — Helm values untuk
+Prometheus/Grafana, Gitea, ArgoCD, dan Application manifest ArgoCD — hidup di
+repo terpisah: `homelab-infra` (lokal di `D:\Workspace Code\Codex\homelab-infra`,
+di-mirror ke Gitea sebagai `homelab-infra`). Alasan dipisah dari repo PPE:
+cluster ini dipakai lintas proyek (bukan cuma PPE), jadi config platform-nya
+tidak boleh terikat ke satu app tertentu. Manifest yang memang spesifik ke
+cara PPE di-deploy (`ppe-pv.yaml`, `ppe-deployment.yaml`, `ppe-ingress.yaml`
+di folder ini) tetap di repo PPE karena berubah bareng kode aplikasinya.
+
 ## Observability — Prometheus + Grafana (kube-prometheus-stack)
 - Namespace: `monitoring`, terpisah dari `default` tempat PPE app jalan.
-- Values Helm ada di `docs/prometheus-values.yaml` — di-tuning untuk homelab
-  CPU-only 2-node ini (bukan default chart yang berasumsi resource besar):
+- Values Helm ada di `homelab-infra/helm-values/prometheus-values.yaml` —
+  di-tuning untuk homelab CPU-only 2-node ini (bukan default chart yang
+  berasumsi resource besar):
   - `kubeControllerManager`/`kubeScheduler`/`kubeProxy`/`kubeEtcd` dimatikan
     karena k3s menjalankan semuanya di satu proses `k3s server`, bukan
     Service terpisah yang bisa di-scrape chart — kalau dibiarkan aktif,
@@ -142,7 +153,7 @@ kubectl create namespace monitoring
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo update prometheus-community
 helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
-  --namespace monitoring --version 88.0.1 -f docs/prometheus-values.yaml
+  --namespace monitoring --version 88.0.1 -f ../homelab-infra/helm-values/prometheus-values.yaml
 ```
 
 Akses Grafana: `http://grafana.127.0.0.1.nip.io:8080` (subdomain nip.io
