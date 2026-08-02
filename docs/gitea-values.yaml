@@ -1,0 +1,53 @@
+# Gitea values sized for the k3d homelab — a self-hosted git remote so
+# ArgoCD can pull manifests without exposing anything to the internet.
+# Single instance only (not multi-user production Gitea): sqlite instead of
+# the chart's default postgresql-ha, memory session/cache instead of the
+# default valkey cluster, both of which are massively oversized for this.
+# See docs/README.md for the cluster's CPU-only homelab context.
+
+replicaCount: 1
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { cpu: 500m, memory: 512Mi }
+
+persistence:
+  enabled: true
+  size: 2Gi
+  storageClass: local-path
+
+postgresql-ha:
+  enabled: false
+postgresql:
+  enabled: false
+valkey-cluster:
+  enabled: false
+valkey:
+  enabled: false
+
+gitea:
+  admin:
+    username: admin
+    email: admin@homelab.local
+    passwordMode: keepUpdated
+  config:
+    database:
+      DB_TYPE: sqlite3
+    session:
+      PROVIDER: memory
+    cache:
+      ADAPTER: memory
+    queue:
+      TYPE: level
+    server:
+      DOMAIN: git.127.0.0.1.nip.io
+      ROOT_URL: http://git.127.0.0.1.nip.io:8080/
+
+ingress:
+  enabled: true
+  className: traefik
+  hosts:
+    - host: git.127.0.0.1.nip.io
+      paths:
+        - path: /
+  tls: []
