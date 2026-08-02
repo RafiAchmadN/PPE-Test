@@ -28,12 +28,28 @@ percakapan sesi ini):
    `1414`, bukan `10de`), dan setelah label PCI ditambal manual, mentok lagi di
    error "gagal membaca OS node" — akar masalah yang sama (OS node k3d bukan
    distro Linux standar) muncul lagi di lapisan berbeda.
+4. Dicoba lepas k3d sepenuhnya, pasang `k3s` langsung di WSL2 (bukan di dalam
+   Docker) supaya node = WSL2 Ubuntu asli, bukan image node minimal — tapi
+   kubelet gagal start sama sekali (`ContainerManager` crash-loop, error
+   "system validation failed - wrong number of fields (expected 6, got 7)").
+   Root cause: kubelet mem-parsing `/proc/self/mountinfo` untuk validasi
+   cgroup, dan kernel WSL2 (kustom Microsoft, mount `drvfs`/9p untuk akses
+   `/mnt/c` dkk) menghasilkan baris mount dengan jumlah field yang tidak
+   lazim. Bukan soal swap (sudah dicoba dimatikan via `.wslconfig`, tidak
+   berubah) dan bukan regresi versi terbaru (identik di `v1.36.2+k3s1` dan
+   `v1.30.14+k3s2`, 6 versi minor lebih lama, 7+ kali percobaan restart) —
+   ini ketidakcocokan `/proc/self/mountinfo` WSL2 vs kubelet yang berlaku di
+   rentang versi luas, bukan bug spesifik satu rilis.
 
-Kesimpulan: ini bukan salah konfigurasi yang bisa ditambal cepat, tapi
-ketidakcocokan struktural antara image node k3d dan asumsi tooling NVIDIA.
-GPU tetap terpakai penuh di jalur **Docker Compose** (`PPE-docker-compose.yml`)
-yang sudah terbukti jalan — jalur K8s ini murni untuk belajar konsep
-Kubernetes/homelab, bukan untuk demo performa inferensi.
+Kesimpulan: bukan salah konfigurasi yang bisa ditambal cepat di titik manapun
+— tiga jalur berbeda (k3d image, GPU Operator, k3s bare-metal) masing-masing
+mentok di ketidakcocokan WSL2 yang berbeda-beda. GPU tetap terpakai penuh di
+jalur **Docker Compose** (`PPE-docker-compose.yml`) yang sudah terbukti jalan
+(WSL2 + `docker run --gpus all` langsung TERBUKTI bekerja normal — masalahnya
+selalu muncul begitu ada lapisan Kubernetes/kubelet/containerd tambahan di
+atasnya). Jalur K8s ini murni untuk belajar konsep Kubernetes/homelab, bukan
+untuk demo performa inferensi — jangan coba GPU lagi di WSL2 kecuali pindah
+ke VM Linux asli (non-WSL2) atau server Linux fisik.
 
 ## File di folder ini
 - `ppe-pv.yaml` — PersistentVolumeClaim (storage class `local-path`, dynamic provisioning)
