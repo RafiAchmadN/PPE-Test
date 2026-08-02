@@ -85,7 +85,10 @@ docker build -t ppe-frontend:latest \
 #    terlihat oleh k3d)
 k3d image import ppe-backend:latest ppe-frontend:latest -c homelab
 
-# 4. Apply manifest (urutan penting: PVC dulu supaya Deployment bisa mount-nya)
+# 4. Apply manifest — HANYA untuk bootstrap awal (cluster baru/kosong).
+#    Setelah ArgoCD terpasang (lihat "GitOps" di bawah), jangan pakai kubectl
+#    apply manual lagi untuk manifest ini — ArgoCD auto-sync akan menganggapnya
+#    "drift" dan menimpanya balik ke versi git (selfHeal: true).
 kubectl apply -f ppe-pv.yaml
 kubectl apply -f ppe-deployment.yaml
 kubectl apply -f ppe-ingress.yaml
@@ -118,6 +121,30 @@ kubectl rollout restart deployment/ppe-backend deployment/ppe-frontend
 `imagePullPolicy: Never` di manifest berarti K8s tidak akan otomatis ambil image baru
 kecuali di-import ulang + pod di-restart manual (`rollout restart`) — beda dengan
 `docker compose up -d --build` yang otomatis recreate container.
+
+## GitOps — deploy otomatis via ArgoCD
+Setelah bootstrap awal (langkah di atas), perubahan ke `ppe-pv.yaml` /
+`ppe-deployment.yaml` / `ppe-ingress.yaml` tidak lagi lewat `kubectl apply`
+manual. Alurnya:
+
+1. Edit manifest di folder ini seperti biasa.
+2. `git commit` + `git push gitea master` (remote `gitea` mengarah ke
+   `http://git.127.0.0.1.nip.io:8080/admin/PPE.git`, dibuat lewat
+   `git remote add gitea http://admin:<password>@git.127.0.0.1.nip.io:8080/admin/PPE.git`).
+3. ArgoCD (Application `ppe`, didefinisikan di repo `homelab-infra`, lihat
+   `argocd-apps/ppe.yaml` di sana) polling repo ini tiap ~3 menit, deteksi
+   commit baru, `kubectl apply` otomatis — tanpa perlu masuk ke cluster sama
+   sekali. Cek progress: `kubectl get application ppe -n argocd`, atau lewat
+   UI `http://argocd.127.0.0.1.nip.io:8080`.
+
+Gambaran build image tetap manual (`docker build` + `k3d image import`,
+lihat "Update setelah ubah kode" di atas) — ArgoCD hanya mengurus manifest
+K8s, bukan build image, karena `imagePullPolicy: Never` butuh image sudah
+ada di node sebelum pod dibuat.
+
+Kenapa image dan repo yang sama (`PPE`) menyimpan manifest K8s-nya sendiri,
+sementara Helm values Prometheus/Gitea/ArgoCD dan Application manifest-nya
+ada di repo lain (`homelab-infra`) — lihat bagian di bawah.
 
 ## Platform/infra terpisah dari repo ini
 Config yang sifatnya cluster-wide (bukan spesifik PPE) — Helm values untuk
