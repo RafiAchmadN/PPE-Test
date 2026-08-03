@@ -85,20 +85,27 @@ docker build -t ppe-frontend:latest \
 #    terlihat oleh k3d)
 k3d image import ppe-backend:latest ppe-frontend:latest -c homelab
 
-# 4. Apply manifest — HANYA untuk bootstrap awal (cluster baru/kosong).
+# 4. Buat namespace + Secret SECRET_KEY (WAJIB sebelum apply Deployment,
+#    lihat "Keamanan" di bawah — Deployment mereferensikan Secret ini lewat
+#    secretKeyRef, pod gagal start kalau belum ada)
+kubectl create namespace ppe
+kubectl create secret generic ppe-secrets -n ppe --from-literal=SECRET_KEY="$(openssl rand -hex 32)"
+
+# 5. Apply manifest — HANYA untuk bootstrap awal (cluster baru/kosong).
 #    Setelah ArgoCD terpasang (lihat "GitOps" di bawah), jangan pakai kubectl
 #    apply manual lagi untuk manifest ini — ArgoCD auto-sync akan menganggapnya
 #    "drift" dan menimpanya balik ke versi git (selfHeal: true).
-kubectl apply -f ppe-pv.yaml
-kubectl apply -f ppe-deployment.yaml
-kubectl apply -f ppe-ingress.yaml
+kubectl apply -f ppe-pv.yaml -n ppe
+kubectl apply -f ppe-deployment.yaml -n ppe
+kubectl apply -f ppe-ingress.yaml -n ppe
+kubectl apply -f ppe-networkpolicy.yaml -n ppe
 
-# 5. Cek status
-kubectl get pods
-kubectl get pvc
-kubectl logs -f deployment/ppe-backend
+# 6. Cek status
+kubectl get pods -n ppe
+kubectl get pvc -n ppe
+kubectl logs -f deployment/ppe-backend -n ppe
 
-# 6. Test akses
+# 7. Test akses
 curl -H "Host: ppe.127.0.0.1.nip.io" http://localhost:8080/api/auth/status
 ```
 
@@ -106,8 +113,32 @@ curl -H "Host: ppe.127.0.0.1.nip.io" http://localhost:8080/api/auth/status
 Buka: `http://ppe.127.0.0.1.nip.io:8080`
 
 Login pertama kali wajib ganti password default (`admin` / lihat log
-`kubectl logs deployment/ppe-backend` untuk instruksi) — sama seperti alur di
-[README.md](../README.md) utama.
+`kubectl logs deployment/ppe-backend -n ppe` untuk instruksi) — sama seperti
+alur di [README.md](../README.md) utama.
+
+## Keamanan (namespace, RBAC, NetworkPolicy, Secret)
+- **Namespace `ppe`** — bukan `default` lagi. Isolasi blast-radius: RBAC dan
+  NetworkPolicy di bawah ini scoped ke namespace, jadi lebih rapi kalau
+  cluster ini nanti dipakai proyek lain juga (lihat `homelab-infra`).
+- **RBAC** — `ppe-backend-sa` dan `ppe-frontend-sa` (didefinisikan di
+  `ppe-deployment.yaml`), keduanya dengan `automountServiceAccountToken:
+  false` dan TANPA Role/RoleBinding apa pun. App ini tidak pernah memanggil
+  K8s API, jadi least-privilege yang benar bukan "kasih izin terbatas" tapi
+  cabut total token-nya — pod bahkan tidak punya volume `kube-api-access-*`
+  ter-mount (cek: `kubectl get pod <pod> -n ppe -o jsonpath='{.spec.volumes[*].name}'`).
+- **NetworkPolicy** (`ppe-networkpolicy.yaml`) — default-deny semua ingress
+  di namespace `ppe`, lalu allow eksplisit HANYA dari pod Traefik
+  (`kube-system`) ke `ppe-backend-svc:5000` dan `ppe-frontend-svc:80`. Diuji
+  langsung: pod acak di namespace lain yang coba `wget` ke Service ini
+  ditolak (`connection refused`), sementara traffic lewat Ingress tetap
+  jalan normal. Egress TIDAK dibatasi (DNS/internet tetap jalan).
+- **Secret `SECRET_KEY`** — sebelumnya opsional/auto-generate & persist di
+  SQLite (`app_settings` table, lihat `app_web.py`), sekarang eksplisit
+  lewat K8s Secret (`ppe-deployment.yaml` pakai `secretKeyRef`). Secret-nya
+  sendiri **tidak di-commit ke git** (sama seperti kredensial repo ArgoCD) —
+  dibuat manual sekali via `kubectl create secret generic ppe-secrets -n ppe
+  --from-literal=SECRET_KEY="$(openssl rand -hex 32)"` SEBELUM apply
+  Deployment, kalau belum ada pod gagal start (`CreateContainerConfigError`).
 
 ## Update setelah ubah kode
 ```bash
@@ -116,7 +147,7 @@ docker build -t ppe-frontend:latest \
   --build-arg VITE_API_URL=http://ppe.127.0.0.1.nip.io:8080 \
   -f frontend/Dockerfile ./frontend                               # kalau frontend berubah
 k3d image import ppe-backend:latest ppe-frontend:latest -c homelab
-kubectl rollout restart deployment/ppe-backend deployment/ppe-frontend
+kubectl rollout restart deployment/ppe-backend deployment/ppe-frontend -n ppe
 ```
 `imagePullPolicy: Never` di manifest berarti K8s tidak akan otomatis ambil image baru
 kecuali di-import ulang + pod di-restart manual (`rollout restart`) — beda dengan

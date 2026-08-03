@@ -11,7 +11,26 @@
 # (PPE-docker-compose.yml), yang tidak kena masalah ini karena tidak ada lapisan
 # node Kubernetes/NFD di antaranya.
 
+# ─── RBAC ─────────────────────────────────────────────────────────────────
+# ServiceAccount khusus per-workload, TANPA Role/RoleBinding sama sekali, dan
+# automountServiceAccountToken dimatikan — backend/frontend tidak pernah
+# memanggil K8s API, jadi least-privilege yang benar bukan "kasih izin
+# terbatas", tapi cabut total token-nya. Kalau nanti butuh akses API,
+# baru tambah Role scoped di sini.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ppe-backend-sa
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ppe-frontend-sa
+automountServiceAccountToken: false
+
 # ─── BACKEND ──────────────────────────────────────────────────────────────
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -26,6 +45,8 @@ spec:
       labels:
         app: ppe-backend
     spec:
+      serviceAccountName: ppe-backend-sa
+      automountServiceAccountToken: false
       initContainers:
         # PVC baru selalu kosong. Container ini menyiapkan logging.db (file kosong,
         # nanti diisi skema oleh init_db() saat Flask start) + folder data/backups
@@ -58,8 +79,11 @@ spec:
                            # dengan instance pelanggan (Docker Compose) yang sudah TLS
             # - name: DEMO_MODE
             #   value: "1"   # aktifkan HANYA untuk demo publik terbatas, lihat docs/SAAS_READINESS_AUDIT.md §8
-            # - name: SECRET_KEY
-            #   value: "ganti-dengan-random-string"   # opsional, default auto-generate & persist di DB
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ppe-secrets   # dibuat manual lewat kubectl, TIDAK di-commit — lihat docs/README.md
+                  key: SECRET_KEY
           resources:
             requests:
               cpu: "500m"
@@ -126,6 +150,8 @@ spec:
       labels:
         app: ppe-frontend
     spec:
+      serviceAccountName: ppe-frontend-sa
+      automountServiceAccountToken: false
       containers:
         - name: ppe-frontend
           image: ppe-frontend:latest
