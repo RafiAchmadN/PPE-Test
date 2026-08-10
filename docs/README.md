@@ -75,10 +75,16 @@ ke VM Linux asli (non-WSL2) atau server Linux fisik.
 # 1. Masuk ke folder project PPE (WSL)
 cd "/mnt/d/Workspace Code/Codex/Python/PPE"
 
-# 2. Build KEDUA image (backend & frontend beda Dockerfile/context)
+# 2. Build KEDUA image (backend & frontend beda Dockerfile/context).
+#    VITE_API_URL SENGAJA dikosongkan (bukan URL absolut) -- frontend &
+#    backend di k3d ini same-origin lewat path routing Ingress (lihat
+#    ppe-ingress.yaml), jadi fetch relative otomatis ikut hostname apa pun
+#    yang dipakai akses (127.0.0.1 ATAU Tailscale IP, tanpa rebuild ulang).
+#    Isi VITE_API_URL cuma perlu kalau frontend & backend beda origin
+#    (kayak Docker Compose production, lihat "Update setelah ubah kode").
 docker build -t ppe-backend:latest -f PPE-Dockerfile .
 docker build -t ppe-frontend:latest \
-  --build-arg VITE_API_URL=http://ppe.127.0.0.1.nip.io:8080 \
+  --build-arg VITE_API_URL= \
   -f frontend/Dockerfile ./frontend
 
 # 3. Import KEDUA image ke cluster k3d (WAJIB — image lokal tidak otomatis
@@ -144,7 +150,7 @@ alur di [README.md](../README.md) utama.
 ```bash
 docker build -t ppe-backend:latest -f PPE-Dockerfile .          # kalau backend berubah
 docker build -t ppe-frontend:latest \
-  --build-arg VITE_API_URL=http://ppe.127.0.0.1.nip.io:8080 \
+  --build-arg VITE_API_URL= \
   -f frontend/Dockerfile ./frontend                               # kalau frontend berubah
 k3d image import ppe-backend:latest ppe-frontend:latest -c homelab
 kubectl rollout restart deployment/ppe-backend deployment/ppe-frontend -n ppe
