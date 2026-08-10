@@ -46,3 +46,31 @@ spec:
                 name: ppe-frontend-svc
                 port:
                   number: 80
+    # Akses jarak jauh lewat Tailscale (lihat homelab-infra/README.md
+    # "Remote access via Tailscale") — Traefik cocokkan Host header persis,
+    # jadi hostname berbasis IP Tailscale ini butuh rule terpisah, bukan
+    # otomatis ikut dari rule di atas.
+    - host: ppe.100.117.143.47.nip.io
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: ppe-backend-svc
+                port:
+                  number: 5000
+          - path: /foto
+            pathType: Prefix
+            backend:
+              service:
+                name: ppe-backend-svc
+                port:
+                  number: 5000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ppe-frontend-svc
+                port:
+                  number: 80
