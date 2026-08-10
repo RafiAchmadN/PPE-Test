@@ -2,7 +2,11 @@
 // Semua request memakai credentials:'include' supaya cookie sesi Flask ikut
 // terkirim lintas origin (backend mengizinkannya lewat flask-cors + SameSite=Lax).
 
-export const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+// ?? (bukan ||): VITE_API_URL="" yang sengaja di-set kosong saat build (lihat
+// Dockerfile) berarti "pakai origin halaman saat ini" (relative fetch) --
+// || akan salah anggap string kosong sebagai "tidak di-set" dan jatuh ke
+// fallback localhost:5000, ?? cuma fallback kalau benar-benar undefined.
+export const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:5000';
 
 let unauthorizedHandler = null;
 export function setUnauthorizedHandler(fn) {
