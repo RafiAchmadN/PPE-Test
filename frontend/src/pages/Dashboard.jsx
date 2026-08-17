@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import * as api from '../lib/api';
 import StatCard from '../components/StatCard';
 import ComplianceMeter from '../components/ComplianceMeter';
+import ViolationTypeChart from '../components/ViolationTypeChart';
 import ViolationsTable from '../components/ViolationsTable';
 import EvidenceModal from '../components/EvidenceModal';
 import { useVisibleCameras } from '../hooks/useVisibleCameras';
@@ -100,7 +101,7 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-4 mb-5 items-stretch">
+      <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr_1fr] gap-4 mb-5 items-stretch">
         <div className="card bg-base-100 shadow-sm border border-base-300 overflow-hidden">
           <div className="flex items-center justify-between px-5 py-4 border-b border-base-300">
             <h3 className="font-semibold text-sm">{preview ? `Live Monitoring — ${preview.name}` : 'Live Monitoring'}</h3>
@@ -136,6 +137,13 @@ export default function Dashboard() {
             <h3 className="font-semibold text-sm">Statistik Kepatuhan</h3>
           </div>
           <ComplianceMeter pct={stats?.compliance_pct ?? null} compliant={stats?.compliant_frames} violation={stats?.violation_frames} />
+        </div>
+
+        <div className="card bg-base-100 shadow-sm border border-base-300 overflow-hidden">
+          <div className="px-5 py-4 border-b border-base-300">
+            <h3 className="font-semibold text-sm">Distribusi Jenis Pelanggaran</h3>
+          </div>
+          <ViolationTypeChart byType={stats?.by_type} />
         </div>
       </div>
 

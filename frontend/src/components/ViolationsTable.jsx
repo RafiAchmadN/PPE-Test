@@ -1,23 +1,5 @@
 import { evidenceUrl } from '../lib/api';
-
-const TYPE_LABELS = {
-  'no-helmet': 'No Helmet',
-  'no-vest': 'No Vest',
-  'no-boots': 'No Boots',
-  'no-goggles': 'No Goggles',
-  'no-gloves': 'No Gloves',
-};
-const TYPE_BADGE = {
-  'no-helmet': 'badge-error badge-soft',
-  'no-vest': 'badge-warning badge-soft',
-};
-
-function resolveType(jenis) {
-  const j = jenis || '';
-  return (
-    Object.keys(TYPE_LABELS).find((k) => j.includes(k.replace('-', '_')) || j === k) || 'no-vest'
-  );
-}
+import { TYPE_LABELS, TYPE_BADGE, resolveType } from '../lib/violationTypes';
 
 export default function ViolationsTable({ rows, onShowEvidence, emptyText }) {
   if (!rows || !rows.length) {
