@@ -631,6 +631,23 @@ def _inference_worker():
                 with cs.lock:
                     cs.frame = frame
 
+            # "illegal memory access" / "unspecified launch failure" / device-side
+            # assert dkk menandakan CUDA context proses ini sudah corrupt — SEMUA
+            # panggilan CUDA berikutnya akan gagal identik selamanya (bukan error
+            # per-frame yang bisa di-skip). Tidak ada cara pulih di dalam proses
+            # yang sama, jadi keluar paksa dan biarkan `restart: unless-stopped`
+            # (Docker Compose) / reconcile otomatis (K8s Deployment) menyalakan
+            # proses baru dengan CUDA context bersih, daripada diam-diam macet
+            # (inference "mati" tanpa restart manual, lihat riwayat chat).
+            fatal_cuda = any(sig in str(e).lower() for sig in (
+                'illegal memory access', 'unspecified launch failure',
+                'device-side assert', 'cuda error',
+            ))
+            if fatal_cuda and _device == 'cuda':
+                print("[INFER WORKER] CUDA context corrupt, tidak bisa dipulihkan "
+                      "di proses ini — keluar supaya container di-restart otomatis.")
+                os._exit(1)
+
 
 # ─── CAMERA STREAMING ────────────────────────────────────────────────────────
 class CameraStream:
