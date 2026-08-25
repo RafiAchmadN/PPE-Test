@@ -1,6 +1,6 @@
 # Deployment + Service untuk backend (Flask API + inferensi) dan frontend
 # (React SPA di-serve nginx) — dua service terpisah, sinkron dengan arsitektur
-# 3-container di PPE-docker-compose.yml (ppe-backend + ppe-frontend + ppe-proxy;
+# 3-container di docker-compose.prod.yml (ppe-backend + ppe-frontend + ppe-proxy;
 # proxy TLS diganti fungsinya oleh Ingress Traefik bawaan k3d, lihat ppe-ingress.yaml).
 #
 # CPU-only (sengaja, bukan belum sempat) — sudah dicoba GPU passthrough sampai ke
@@ -8,7 +8,7 @@
 # image node k3d/rancher-k3s (bukan distro Linux standar; tidak terbaca NFD, biner
 # glibc NVIDIA tidak jalan di sana). Root cause di luar kendali manifest ini — lihat
 # riwayat troubleshooting di percakapan. GPU tetap dipakai penuh lewat Docker Compose
-# (PPE-docker-compose.yml), yang tidak kena masalah ini karena tidak ada lapisan
+# (docker-compose.prod.yml), yang tidak kena masalah ini karena tidak ada lapisan
 # node Kubernetes/NFD di antaranya.
 
 # ─── RBAC ─────────────────────────────────────────────────────────────────

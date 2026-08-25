@@ -1,6 +1,6 @@
 # PersistentVolumeClaim untuk data runtime PPE (logging.db, data/violations,
 # data/videos, backups/) — BUKAN untuk model .pt (model sudah ikut ter-bake ke
-# image Docker lewat "COPY . ." di PPE-Dockerfile, tidak perlu volume terpisah).
+# image Docker lewat "COPY . ." di Dockerfile, tidak perlu volume terpisah).
 #
 # Konsep: PVC = "permintaan" storage ("saya butuh 5Gi yang bertahan walau pod
 # restart/dijadwalkan ulang"). StorageClass "local-path" (sudah default di

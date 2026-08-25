@@ -42,8 +42,8 @@ appliance single-tenant yang dipilih.
 
 | # | Temuan | Dampak | Severity |
 |---|--------|--------|----------|
-| S1 | `PPE-Dockerfile` menjalankan `python app_web.py` → Werkzeug dev server (`app.run(..., debug=False, threaded=True)`) sebagai server produksi | Dev server tidak dirancang untuk beban produksi/koneksi panjang (MJPEG), rentan resource exhaustion, tidak ada worker/proses terpisah | **Critical** |
-| S2 | Tidak ada TLS/HTTPS di `PPE-docker-compose.yml` — port 5000 & 8080 dipublish plaintext | Password login, session cookie, kredensial RTSP kamera, dan snapshot pelanggaran (berisi wajah pekerja) lewat jaringan tanpa enkripsi | **Critical** |
+| S1 | `Dockerfile` menjalankan `python app_web.py` → Werkzeug dev server (`app.run(..., debug=False, threaded=True)`) sebagai server produksi | Dev server tidak dirancang untuk beban produksi/koneksi panjang (MJPEG), rentan resource exhaustion, tidak ada worker/proses terpisah | **Critical** |
+| S2 | Tidak ada TLS/HTTPS di `docker-compose.prod.yml` — port 5000 & 8080 dipublish plaintext | Password login, session cookie, kredensial RTSP kamera, dan snapshot pelanggaran (berisi wajah pekerja) lewat jaringan tanpa enkripsi | **Critical** |
 | S3 | `logging.db` (berisi hash password admin & data pelanggaran) pernah ter-*commit* ke git history (`git log --all -- logging.db` → 3 commit lama) meski sudah di-`.gitignore` sekarang | Siapa pun yang clone history lengkap repo bisa ambil file DB lama | **High** |
 | S4 | Default password `admin123` tercetak di README & di-print ke stdout Docker log saat start, tanpa paksa ganti password di login pertama | Kredensial default adalah vektor serangan #1 untuk perangkat IoT/monitoring yang dipasang lalu dilupakan | **High** |
 | S5 | Tidak ada rate limiting / lockout di `POST /api/auth/login` maupun `POST /api/auth/change-password` | Brute-force password tidak terdeteksi/terhambat sama sekali | **High** |
@@ -77,14 +77,14 @@ appliance single-tenant yang dipilih.
 
 | # | Temuan | Rekomendasi |
 |---|--------|-------------|
-| I1 | `PPE-docker-compose.yml` mensyaratkan `networks.web: external: true` tapi tidak ada langkah `docker network create web` di README maupun di compose file | `docker compose up` di mesin baru **akan gagal** sampai user tahu harus buat network manual dulu. Ganti jadi network internal biasa (tanpa `external: true`) kecuali memang sengaja mau digabung reverse proxy eksternal — kalau begitu, dokumentasikan step-nya |
+| I1 | `docker-compose.prod.yml` mensyaratkan `networks.web: external: true` tapi tidak ada langkah `docker network create web` di README maupun di compose file | `docker compose up` di mesin baru **akan gagal** sampai user tahu harus buat network manual dulu. Ganti jadi network internal biasa (tanpa `external: true`) kecuali memang sengaja mau digabung reverse proxy eksternal — kalau begitu, dokumentasikan step-nya |
 | I2 | Tidak ada `healthcheck:` di service manapun | Docker/orchestrator tidak tahu kalau backend "hidup tapi macet" (mis. inference worker deadlock); tambahkan healthcheck ke `/api/auth/status` atau endpoint `/healthz` baru yang tidak butuh login |
 | I3 | Tidak ada resource limit (`mem_limit`/`deploy.resources.limits`) selain reservasi GPU | Proses yang leak memory (kamera banyak + inference lama) bisa menghabiskan RAM host tanpa batas | 
 | I4 | Backend & frontend expose port langsung ke host tanpa reverse proxy TLS-terminating | Tambahkan Caddy/Nginx/Traefik sebagai satu-satunya entrypoint HTTPS (bisa pakai cert self-signed/internal CA untuk LAN, atau Let's Encrypt kalau expose ke internet) — backend tidak perlu publish port ke host sama sekali |
 | I5 | Logging hanya `print()` ke stdout, tanpa rotasi/level/format terstruktur | Pindah ke modul `logging` Python dengan `RotatingFileHandler` atau biarkan stdout tapi dokumentasikan `docker logs --tail` + `logging` driver rotation di Docker daemon config, supaya disk tidak penuh oleh log |
 | I6 | Tidak ada monitoring/alerting — status kamera online/offline sudah ada di API tapi tidak ada notifikasi proaktif | Tambahkan pengecekan berkala + notifikasi (email/webhook/Telegram) saat: kamera offline > N menit, disk > 80% terpakai, proses inference crash |
 | I7 | Tidak ada CI (lint/test/build check) sebelum kode dikirim ke pelanggan | Minimal: GitHub Actions untuk `pip install` + `python -c "import app_web"` sanity check, `npm run build` frontend, dan (setelah ada) `pip-audit`/`npm audit` |
-| I8 | GPU pinned ke CUDA 12.8/Blackwell (RTX 5060) di `PPE-Dockerfile` — belum tervalidasi di GPU lain atau CPU-only di beban produksi | Bagian dari rencana uji kompatibilitas (§5) sebelum deploy ke "PC yang lebih kuat" yang spec-nya mungkin beda |
+| I8 | GPU pinned ke CUDA 12.8/Blackwell (RTX 5060) di `Dockerfile` — belum tervalidasi di GPU lain atau CPU-only di beban produksi | Bagian dari rencana uji kompatibilitas (§5) sebelum deploy ke "PC yang lebih kuat" yang spec-nya mungkin beda |
 | I9 | Tidak ada strategi update/rollback terdokumentasi untuk instance yang sudah live di pelanggan (README hanya `git pull` + rebuild) | Dokumentasikan prosedur: backup dulu → pull → build → migrate DB (jika ada) → up, plus cara rollback ke image sebelumnya kalau update bermasalah |
 
 ---
@@ -306,7 +306,7 @@ lokal pelanggan.
 - [x] Ganti Werkzeug dev server dengan WSGI production server (waitress) (S1)
 - [x] Tambahkan reverse proxy TLS-terminating (nginx, self-signed untuk
       testing) di depan backend & frontend (S2, I4)
-- [x] Perbaiki `PPE-docker-compose.yml` — hapus dependensi `networks.web:
+- [x] Perbaiki `docker-compose.prod.yml` — hapus dependensi `networks.web:
       external: true` yang tidak terdokumentasi (I1)
 - [x] Paksa ganti password default di login pertama, hentikan print password
       default ke log (S4)
@@ -359,7 +359,7 @@ lokal pelanggan.
 Sebagian besar item P0 sudah diimplementasikan (lihat checklist §9). Yang
 masih perlu dilakukan manual sebelum go-live:
 1. Jalankan `bash scripts/generate-self-signed-cert.sh` lalu `docker compose
-   -f PPE-docker-compose.yml up -d --build` dan lakukan satu kali full
+   -f docker-compose.prod.yml up -d --build` dan lakukan satu kali full
    end-to-end test (belum dijalankan penuh di sesi ini karena image CUDA +
    PyTorch berukuran besar dan `best.pt` tidak tersedia di lingkungan audit).
 2. Ganti sertifikat self-signed di `proxy/certs/` dengan sertifikat asli

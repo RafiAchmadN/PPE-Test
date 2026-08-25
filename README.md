@@ -188,14 +188,14 @@ bash scripts/generate-self-signed-cert.sh
 ### 3. Jalankan dengan Docker (Direkomendasikan)
 ```bash
 # Build image (pertama kali, butuh ~10-15 menit download PyTorch cu128)
-docker compose -f PPE-docker-compose.yml build
+docker compose -f docker-compose.prod.yml build
 
 # Jalankan semua container (backend & frontend tidak lagi publish port host —
 # satu-satunya jalan masuk dari luar adalah lewat ppe-proxy)
-docker compose -f PPE-docker-compose.yml up -d
+docker compose -f docker-compose.prod.yml up -d
 
 # Cek status
-docker compose -f PPE-docker-compose.yml logs -f
+docker compose -f docker-compose.prod.yml logs -f
 ```
 
 ### 4. Akses Dashboard
@@ -209,8 +209,8 @@ sebelum bisa mengakses fitur lain.
 ### 5. Update Setelah Pull
 ```bash
 git pull
-docker compose -f PPE-docker-compose.yml build   # tanpa --no-cache (reuse layer PyTorch)
-docker compose -f PPE-docker-compose.yml up -d
+docker compose -f docker-compose.prod.yml build   # tanpa --no-cache (reuse layer PyTorch)
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ### 6. Jalankan Manual untuk Development (tanpa Docker)
@@ -236,7 +236,7 @@ npm run dev                       # http://localhost:5173 (proxy ke backend via 
 
 ### Environment Variables
 
-**Backend** (`PPE-docker-compose.yml` → service `ppe-backend`):
+**Backend** (`docker-compose.prod.yml` → service `ppe-backend`):
 ```yaml
 environment:
   - FRONTEND_ORIGIN=https://localhost:8443  # Origin frontend (lewat proxy) yang diizinkan CORS
@@ -250,7 +250,7 @@ environment:
   # - MAX_UPLOAD_MB=500
 ```
 
-**Frontend** (`frontend/.env` atau build arg `VITE_API_URL` di `PPE-docker-compose.yml`):
+**Frontend** (`frontend/.env` atau build arg `VITE_API_URL` di `docker-compose.prod.yml`):
 ```env
 VITE_API_URL=https://localhost:5443   # Base URL backend (lewat proxy) yang bisa diakses browser
 ```
@@ -427,8 +427,8 @@ python workflow/step4_train.py
 PPE-Test/
 ├── app_web.py              # Backend Flask — JSON API murni (CORS + session)
 ├── best.pt                 # Bobot model YOLOv11m terlatih
-├── PPE-Dockerfile          # Docker image backend (CUDA 12.8 + PyTorch cu128)
-├── PPE-docker-compose.yml  # Docker Compose — service ppe-backend + ppe-frontend + ppe-proxy
+├── Dockerfile               # Docker image backend (CUDA 12.8 + PyTorch cu128)
+├── docker-compose.prod.yml  # Docker Compose — service ppe-backend + ppe-frontend + ppe-proxy
 ├── requirements.txt        # Python dependencies
 ├── exportdb.py             # Utilitas ekspor database ke Excel/CSV
 ├── logging.db              # Database SQLite (auto-generated)

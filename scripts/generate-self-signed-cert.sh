@@ -24,4 +24,4 @@ openssl req -x509 -nodes -newkey rsa:2048 \
     -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
 
 echo "Sertifikat self-signed dibuat di $CERT_DIR"
-echo "Jalankan 'docker compose -f PPE-docker-compose.yml up -d' setelah ini."
+echo "Jalankan 'docker compose -f docker-compose.prod.yml up -d' setelah ini."

@@ -2,7 +2,7 @@ services:
   ppe-backend:
     build:
       context: .
-      dockerfile: PPE-Dockerfile
+      dockerfile: Dockerfile
     container_name: ppe-backend
     restart: unless-stopped
     volumes:

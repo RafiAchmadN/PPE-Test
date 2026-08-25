@@ -44,7 +44,7 @@ percakapan sesi ini):
 Kesimpulan: bukan salah konfigurasi yang bisa ditambal cepat di titik manapun
 — tiga jalur berbeda (k3d image, GPU Operator, k3s bare-metal) masing-masing
 mentok di ketidakcocokan WSL2 yang berbeda-beda. GPU tetap terpakai penuh di
-jalur **Docker Compose** (`PPE-docker-compose.yml`) yang sudah terbukti jalan
+jalur **Docker Compose** (`docker-compose.prod.yml`) yang sudah terbukti jalan
 (WSL2 + `docker run --gpus all` langsung TERBUKTI bekerja normal — masalahnya
 selalu muncul begitu ada lapisan Kubernetes/kubelet/containerd tambahan di
 atasnya). Jalur K8s ini murni untuk belajar konsep Kubernetes/homelab, bukan
@@ -57,11 +57,11 @@ ke VM Linux asli (non-WSL2) atau server Linux fisik.
   `.pt` TIDAK pakai volume terpisah — sudah ikut ter-bake ke image lewat `COPY . .`.
 - `ppe-deployment.yaml` — Deployment + Service **backend** (Flask API, CPU-only) dan
   **frontend** (React SPA di-serve nginx), dua service terpisah sesuai arsitektur
-  `PPE-docker-compose.yml` saat ini.
+  `docker-compose.prod.yml` saat ini.
 - `ppe-ingress.yaml` — Ingress satu host (`ppe.127.0.0.1.nip.io`) dibedakan lewat path
   (`/` → frontend, `/api` + `/foto` → backend) supaya same-origin, tidak perlu CORS.
 
-## Perbedaan dari deployment Docker Compose (`PPE-docker-compose.yml`)
+## Perbedaan dari deployment Docker Compose (`docker-compose.prod.yml`)
 | Aspek | Docker Compose (produk ke pelanggan) | K8s homelab (demo/belajar, file ini) |
 |---|---|---|
 | TLS | Ya, lewat `ppe-proxy` (nginx, 2 port: 8443/5443) | Belum — HTTP saja lewat Ingress Traefik |
@@ -82,7 +82,7 @@ cd "/mnt/d/Workspace Code/Codex/Python/PPE"
 #    yang dipakai akses (127.0.0.1 ATAU Tailscale IP, tanpa rebuild ulang).
 #    Isi VITE_API_URL cuma perlu kalau frontend & backend beda origin
 #    (kayak Docker Compose production, lihat "Update setelah ubah kode").
-docker build -t ppe-backend:latest -f PPE-Dockerfile .
+docker build -t ppe-backend:latest -f Dockerfile .
 docker build -t ppe-frontend:latest \
   --build-arg VITE_API_URL= \
   -f frontend/Dockerfile ./frontend
@@ -148,7 +148,7 @@ alur di [README.md](../README.md) utama.
 
 ## Update setelah ubah kode
 ```bash
-docker build -t ppe-backend:latest -f PPE-Dockerfile .          # kalau backend berubah
+docker build -t ppe-backend:latest -f Dockerfile .          # kalau backend berubah
 docker build -t ppe-frontend:latest \
   --build-arg VITE_API_URL= \
   -f frontend/Dockerfile ./frontend                               # kalau frontend berubah
