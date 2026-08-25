@@ -10,12 +10,13 @@ import os
 import sys
 import json
 import time
-import queue       
-import socket       
-import sqlite3      
-import secrets      
-import threading    
+import queue
+import socket
+import sqlite3
+import secrets
+import threading
 import traceback
+import zipfile
 from datetime import datetime, date
 from functools import wraps
 from urllib.parse import urlparse
@@ -44,12 +45,14 @@ DVRIP_AVAILABLE = _DVRIP_LIB_OK and _AV_LIB_OK
 # --- CONFIG ---
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 DATABASE_PATH = os.path.join(BASE_DIR, 'logging.db')
-OUTPUT_FOLDER = os.path.join(BASE_DIR, 'data', 'violations')
+OUTPUT_FOLDER  = os.path.join(BASE_DIR, 'data', 'violations')
+ARCHIVE_FOLDER = os.path.join(OUTPUT_FOLDER, 'archive')  # ZIP harian, lihat _archive_worker()
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'data', 'videos')
 BACKUP_FOLDER = os.path.join(BASE_DIR, 'backups')
 INFERENCE_SIZE       = (640, 480)
 ALLOWED_VIDEO_EXTS   = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v'}
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+os.makedirs(ARCHIVE_FOLDER, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(BACKUP_FOLDER, exist_ok=True)
 
@@ -121,7 +124,11 @@ def get_local_ip():
 
 # Runtime settings (adjustable via UI)
 settings = {
-    'violation_delay': 1,       # seconds between captures per camera
+    'violation_delay': 20,      # seconds between captures per camera — JANGAN diset
+                                 # terlalu kecil: dengan 1 detik, satu pelanggaran yang
+                                 # diam di frame selama beberapa menit menghasilkan satu
+                                 # JPEG baru TIAP DETIK (root cause 1,1 juta file / disk
+                                 # penuh dalam 3 hari observasi lapangan).
     'confidence': 0.5,          # threshold untuk PPE class (helmet, rompi, dll)
     'person_confidence': 0.7,   # threshold khusus class Person (lebih tinggi = kurangi false detect)
     'inference_enabled': True,
@@ -172,6 +179,74 @@ def _mask_url(url):
     except Exception:
         pass
     return url
+
+def _archive_zip_path(tanggal):
+    return os.path.join(ARCHIVE_FOLDER, f'violations_{tanggal}.zip')
+
+def _evidence_in_archive(bukti, tanggal):
+    """True kalau file bukti sudah diarsipkan ke ZIP harian (lihat _archive_worker)."""
+    if not bukti or not tanggal:
+        return False
+    zpath = _archive_zip_path(tanggal)
+    if not os.path.isfile(zpath):
+        return False
+    try:
+        with zipfile.ZipFile(zpath) as zf:
+            return bukti in zf.namelist()
+    except Exception:
+        return False
+
+def _archive_worker():
+    """Arsipkan foto bukti pelanggaran hari-hari sebelumnya jadi satu ZIP per
+    tanggal (data/violations/archive/violations_YYYY-MM-DD.zip), lalu hapus
+    JPEG lepasannya. Root cause penumpukan >1 juta file kecil sudah dipangkas
+    lewat violation_delay di atas; ini lapisan kedua supaya foto yang sudah
+    terlanjur ada tetap dirapikan per hari tanpa kehilangan akses — /foto/<f>
+    fallback baca langsung dari ZIP kalau file lepasannya sudah tidak ada."""
+    last_archive_date = None
+    while True:
+        try:
+            today_str = date.today().isoformat()
+            if last_archive_date != today_str:
+                loose = {f for f in os.listdir(OUTPUT_FOLDER) if f.lower().endswith('.jpg')}
+                if loose:
+                    rows = db_execute(
+                        "SELECT Bukti, Tanggal FROM data WHERE Tanggal < ? AND Bukti IS NOT NULL",
+                        (today_str,), fetch=True
+                    )
+                    by_date = {}
+                    for r in rows:
+                        if r['Bukti'] in loose:
+                            by_date.setdefault(r['Tanggal'], []).append(r['Bukti'])
+                    for tanggal, files in by_date.items():
+                        zpath = _archive_zip_path(tanggal)
+                        try:
+                            with zipfile.ZipFile(zpath, 'a', zipfile.ZIP_DEFLATED) as zf:
+                                already = set(zf.namelist())
+                                for fname in files:
+                                    if fname in already:
+                                        continue
+                                    fpath = os.path.join(OUTPUT_FOLDER, fname)
+                                    if os.path.isfile(fpath):
+                                        zf.write(fpath, arcname=fname)
+                            with zipfile.ZipFile(zpath) as zf:
+                                zipped = set(zf.namelist())
+                            removed = 0
+                            for fname in files:
+                                if fname in zipped:
+                                    try:
+                                        os.remove(os.path.join(OUTPUT_FOLDER, fname))
+                                        removed += 1
+                                    except OSError:
+                                        pass
+                            if removed:
+                                print(f"[ARCHIVE] {tanggal}: {removed:,} foto diarsipkan -> {os.path.basename(zpath)}")
+                        except Exception as e:
+                            print(f"[ARCHIVE] Gagal arsipkan {tanggal}: {e}")
+                last_archive_date = today_str
+        except Exception as e:
+            print(f"[ARCHIVE] Error: {e}")
+        time.sleep(3600)  # cek tiap jam — arsip sungguhan hanya jalan 1x/hari (guard di atas)
 
 def _backup_worker():
     """Backup harian logging.db lewat SQLite backup API (aman dijalankan
@@ -238,6 +313,15 @@ def _violation_writer():
                     os.remove(fpath)
             except Exception as e:
                 print(f"[CLEANUP] Gagal hapus file {bukti}: {e}")
+        for fname in os.listdir(ARCHIVE_FOLDER):
+            if fname.startswith('violations_') and fname.endswith('.zip'):
+                fdate = fname[len('violations_'):-len('.zip')]
+                if fdate < cutoff:
+                    try:
+                        os.remove(os.path.join(ARCHIVE_FOLDER, fname))
+                        print(f"[CLEANUP] Hapus arsip ZIP lama: {fname}")
+                    except OSError as e:
+                        print(f"[CLEANUP] Gagal hapus arsip {fname}: {e}")
         print(f"[CLEANUP] Hapus {deleted:,} record + file bukti terkait, lebih lama dari {cutoff}")
 
     while True:
@@ -1114,7 +1198,19 @@ def auth_status():
 @app.route('/foto/<path:filename>')
 @login_required
 def serve_foto(filename):
-    return send_from_directory(OUTPUT_FOLDER, filename)
+    if os.path.isfile(os.path.join(OUTPUT_FOLDER, filename)):
+        return send_from_directory(OUTPUT_FOLDER, filename)
+    # Sudah diarsipkan ke ZIP harian oleh _archive_worker — cari tanggalnya di DB.
+    row = db_execute("SELECT Tanggal FROM data WHERE Bukti=?", (filename,), fetchone=True)
+    if row:
+        zpath = _archive_zip_path(row['Tanggal'])
+        if os.path.isfile(zpath):
+            try:
+                with zipfile.ZipFile(zpath) as zf:
+                    return Response(zf.read(filename), mimetype='image/jpeg')
+            except KeyError:
+                pass
+    return jsonify({'error': 'File tidak ditemukan'}), 404
 
 @app.route('/api/info')
 @login_required
@@ -1318,7 +1414,11 @@ def api_logs():
         )
     # Cek file existence hanya untuk record yang ditampilkan (bukan semua)
     for r in rows:
-        r['file_exists'] = os.path.isfile(os.path.join(OUTPUT_FOLDER, r.get('Bukti', '')))
+        bukti = r.get('Bukti', '')
+        r['file_exists'] = (
+            os.path.isfile(os.path.join(OUTPUT_FOLDER, bukti))
+            or _evidence_in_archive(bukti, r.get('Tanggal', ''))
+        )
     return jsonify(rows)
 
 @app.route('/api/stats', methods=['GET'])
@@ -1364,6 +1464,7 @@ if __name__ == '__main__':
     threading.Thread(target=load_model, daemon=True).start()
     threading.Thread(target=_violation_writer, daemon=True).start()
     threading.Thread(target=_backup_worker, daemon=True).start()
+    threading.Thread(target=_archive_worker, daemon=True).start()
     # Inference worker — tambah NUM_WORKERS=2 jika kamera > 20
     NUM_WORKERS = 1
     for _ in range(NUM_WORKERS):
