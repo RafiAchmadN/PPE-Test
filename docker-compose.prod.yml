@@ -11,13 +11,14 @@ services:
       - ./backups:/app/backups   # arahkan ke disk sekunder/NAS untuk keamanan ekstra
     environment:
       - PYTHONUNBUFFERED=1
-      - FRONTEND_ORIGIN=https://localhost:8443
+      - FRONTEND_ORIGIN=https://project.insamo.id
       - SESSION_COOKIE_SECURE=1        # aman karena proxy sudah menyediakan HTTPS
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       # - DEMO_MODE=1                  # aktifkan HANYA di instance demo publik terpisah (lihat docs/SAAS_READINESS_AUDIT.md §8)
       # - SECRET_KEY=ganti-dengan-random-string-panjang   (opsional — default sudah auto-generate & persist di DB)
-    # Tidak publish port ke host — hanya bisa diakses lewat ppe-proxy (TLS).
+    # Tidak publish port ke host — dijangkau langsung oleh nginx-gateway lewat
+    # network "web" (nama container = DNS name), TLS-nya sudah ditangani gateway.
     deploy:
       resources:
         reservations:
@@ -33,15 +34,25 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: https://localhost:5443
+        # /ppe adalah prefix path di depan nginx-gateway (project.insamo.id/ppe/) —
+        # BUKAN https://localhost:5443. Frontend & backend satu origin lewat gateway,
+        # jadi fetch relatif "/ppe" + "/api/..." -> "/ppe/api/...". Lihat
+        # frontend/src/lib/api.js untuk penjelasan lengkap ?? vs || di API_BASE.
+        VITE_API_URL: /ppe
     container_name: ppe-frontend
     restart: unless-stopped
     depends_on:
       - ppe-backend
-    # Tidak publish port ke host — hanya bisa diakses lewat ppe-proxy (TLS).
+    # Tidak publish port ke host — dijangkau langsung oleh nginx-gateway lewat
+    # network "web" (nama container = DNS name), TLS-nya sudah ditangani gateway.
     networks:
       - web
 
+  # OPSIONAL — tidak dipakai jalur project.insamo.id/ppe/ (nginx-gateway
+  # terhubung langsung ke ppe-backend/ppe-frontend lewat network "web", lihat
+  # repo infra-nginx). Proxy ini cuma perlu dinyalakan untuk akses TLS
+  # langsung di LAN/testing lokal (https://localhost:8443) tanpa lewat
+  # gateway sama sekali — kalau tidak butuh itu, boleh skip service ini.
   ppe-proxy:
     build:
       context: ./proxy
@@ -61,4 +72,9 @@ services:
 
 networks:
   web:
-    driver: bridge
+    external: true   # network bersama nginx-gateway (lihat repo infra-nginx) —
+                      # WAJIB sudah ada duluan: docker network create web
+                      # (kalau belum pernah dibuat sama sekali di host ini).
+                      # Tanpa external:true, compose bikin network terisolasi
+                      # sendiri (mis. ppe-test_web) dan gateway tidak bisa
+                      # menjangkau ppe-backend/ppe-frontend sama sekali.
