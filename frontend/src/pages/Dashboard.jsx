@@ -122,14 +122,6 @@ export default function Dashboard() {
               <NoSignal text="Belum ada kamera" />
             )}
           </div>
-          <div className="flex items-center justify-between px-5 py-3 text-xs text-base-content/60">
-            <span>
-              <span className="inline-block w-2 h-2 rounded-full bg-success mr-1.5"></span>APD Lengkap
-            </span>
-            <span>
-              <span className="inline-block w-2 h-2 rounded-full bg-error mr-1.5"></span>APD Tidak Lengkap
-            </span>
-          </div>
         </div>
 
         <div className="card bg-base-100 shadow-sm border border-base-300 overflow-hidden">

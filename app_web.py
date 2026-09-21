@@ -903,7 +903,7 @@ class CameraStream:
         self.active = False
         self.thread = None
         self.last_violation_time = 0
-        self.fps = 0
+        self.capture_fps = 0  # kecepatan baca dari sumber kamera -- BUKAN fps yang sampai ke browser, lihat get_info()
         self.connected = False
         self.error_msg = ""
 
@@ -1131,7 +1131,7 @@ class CameraStream:
             fc += 1
             el = time.time() - ft
             if el >= 2:
-                self.fps = fc / el
+                self.capture_fps = fc / el
                 fc = 0; ft = time.time()
 
             # Simpan frame mentah untuk streaming — tidak tunggu inference.
@@ -1288,7 +1288,7 @@ class CameraStream:
             time.sleep(0.1)
             el = time.time() - ft
             if el >= 2:
-                self.fps = frame_counter[0] / el
+                self.capture_fps = frame_counter[0] / el
                 frame_counter[0] = 0
                 ft = time.time()
 
@@ -1320,7 +1320,18 @@ class CameraStream:
             return jpeg
 
     def get_info(self):
-        return {'connected': self.connected, 'fps': round(self.fps, 1), 'error': self.error_msg}
+        # 'fps' yang dikirim ke frontend = fps yang BENERAN sampai ke browser
+        # (_effective_stream_fps, dijepit 2-15fps sesuai jumlah kamera aktif —
+        # lihat komentar di sana), BUKAN capture_fps (kecepatan baca dari
+        # sumber kamera). Sebelumnya UI nampilin capture_fps mentah, jadi bisa
+        # ke-baca "28 fps" padahal yang benar-benar dikirim ke browser cuma
+        # sebagian kecil dari itu -- video kelihatan patah-patah padahal
+        # angkanya tinggi, membingungkan.
+        return {
+            'connected': self.connected,
+            'fps': round(_effective_stream_fps(), 1) if self.connected else 0,
+            'error': self.error_msg,
+        }
 
 
 camera_streams = {}

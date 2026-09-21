@@ -30,7 +30,7 @@ export default function ViolationTypeChart({ byType }) {
               style={{ width: `${Math.max((count / max) * 100, 4)}%` }}
             />
           </div>
-          <span className="w-8 flex-shrink-0 text-right text-xs font-mono-app text-base-content">
+          <span className="min-w-[4rem] flex-shrink-0 text-right text-xs font-mono-app text-base-content tabular-nums">
             {count.toLocaleString('id-ID')}
           </span>
         </div>

@@ -99,7 +99,7 @@ export default function CameraManagement() {
                   <th>Name</th>
                   <th>URL / Source</th>
                   <th>Status</th>
-                  <th>FPS</th>
+                  <th title="Fps yang terkirim ke browser, bukan kecepatan capture kamera">Stream FPS</th>
                   <th>Actions</th>
                 </tr>
               </thead>

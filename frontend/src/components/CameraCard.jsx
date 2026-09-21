@@ -34,7 +34,9 @@ export default function CameraCard({ cam, fullscreen, onToggleFullscreen }) {
           </div>
         )}
       </div>
-      <div className="px-4 py-2 text-[11px] text-base-content/40 font-mono-app flex-shrink-0">FPS: {cam.fps || 0}</div>
+      <div className="px-4 py-2 text-[11px] text-base-content/40 font-mono-app flex-shrink-0" title="Fps yang benar-benar terkirim ke browser, otomatis menyesuaikan jumlah kamera aktif — bukan kecepatan capture kamera">
+        Stream: {cam.fps || 0} fps
+      </div>
     </div>
   );
 }
