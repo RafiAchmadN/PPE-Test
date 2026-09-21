@@ -100,7 +100,6 @@ function UserManagementCard() {
               <tr>
                 <th>Email</th>
                 <th>Role</th>
-                <th>Status</th>
                 <th>Dibuat</th>
                 <th></th>
               </tr>
@@ -114,13 +113,6 @@ function UserManagementCard() {
                   </td>
                   <td>
                     <span className={`badge badge-sm ${u.role === 'admin' ? 'badge-primary' : 'badge-ghost'}`}>{u.role}</span>
-                  </td>
-                  <td>
-                    {u.must_change_password ? (
-                      <span className="badge badge-sm badge-warning">wajib ganti pw</span>
-                    ) : (
-                      <span className="text-base-content/30 text-xs">—</span>
-                    )}
                   </td>
                   <td className="text-xs text-base-content/50">{u.created_at}</td>
                   <td>

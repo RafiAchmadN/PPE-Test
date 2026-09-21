@@ -118,9 +118,9 @@ curl -H "Host: ppe.127.0.0.1.nip.io" http://localhost:8080/api/auth/status
 ## Akses dari browser
 Buka: `http://ppe.127.0.0.1.nip.io:8080`
 
-Login pertama kali wajib ganti password default (`admin` / lihat log
-`kubectl logs deployment/ppe-backend -n ppe` untuk instruksi) — sama seperti
-alur di [README.md](../README.md) utama.
+Login pakai `admin@example.com` / password default (lihat log
+`kubectl logs deployment/ppe-backend -n ppe` untuk instruksi) — ganti lewat
+Settings → Manajemen Akun, sama seperti alur di [README.md](../README.md) utama.
 
 ## Keamanan (namespace, RBAC, NetworkPolicy, Secret)
 - **Namespace `ppe`** — bukan `default` lagi. Isolasi blast-radius: RBAC dan

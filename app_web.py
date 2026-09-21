@@ -211,10 +211,6 @@ def db_execute(query, params=(), fetch=False, fetchone=False):
 RETENTION_DAYS = 30  # hapus data lebih lama dari N hari (0 = tidak hapus)
 BACKUP_RETENTION_DAYS = int(os.environ.get('BACKUP_RETENTION_DAYS', '14'))
 
-def _get_must_change_password(user_id):
-    row = db_execute("SELECT must_change_password FROM users WHERE id=?", (user_id,), fetchone=True)
-    return bool(row) and row['must_change_password'] == 1
-
 def _admin_count():
     row = db_execute("SELECT COUNT(*) c FROM users WHERE role='admin'", fetchone=True)
     return row['c'] if row else 0
@@ -437,7 +433,6 @@ def init_db():
         username TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'user',
-        must_change_password INTEGER NOT NULL DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now','localtime'))
     )""")
     conn.commit()
@@ -465,33 +460,33 @@ def init_db():
     # Akun default — cuma dibuat kalau tabel users masih benar-benar kosong,
     # supaya ini murni jalan satu kali (baik instance baru maupun upgrade dari
     # skema single-admin lama), tidak pernah menimpa akun yang sudah dibuat user.
+    # Tidak ada lagi alur wajib-ganti-password: kalau admin mau ganti password
+    # siapapun (termasuk akun ini), lewat Settings -> Manajemen Akun.
     user_count = conn.execute("SELECT COUNT(*) c FROM users").fetchone()[0]
     if user_count == 0:
         # Migrasi dari skema lama (satu admin_pw_hash di app_settings) kalau ada
-        # — supaya password yang sudah diganti user TIDAK di-reset ke admin123.
+        # — supaya password yang sudah diganti user TIDAK di-reset ke admin1234.
         old_hash = conn.execute("SELECT value FROM app_settings WHERE key='admin_pw_hash'").fetchone()
         if old_hash:
-            old_mcp = conn.execute("SELECT value FROM app_settings WHERE key='must_change_password'").fetchone()
-            mcp = 1 if (old_mcp is None or old_mcp[0] == '1') else 0
             # Username lama 'admin' (bukan email) diganti ke format email supaya
             # konsisten dengan akun baru — password TIDAK berubah, cuma identitas
             # login-nya. Kalau nanti bentrok sama akun email lain, staf yang
             # sudah tahu ini tinggal login pakai admin@example.com.
             conn.execute(
-                "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,?)",
-                ('admin@example.com', old_hash[0], 'admin', mcp))
+                "INSERT INTO users (username, password_hash, role) VALUES (?,?,?)",
+                ('admin@example.com', old_hash[0], 'admin'))
             print("[MIGRATE] Akun admin lama dipindah ke tabel users sebagai admin@example.com (password tidak berubah).")
         else:
             conn.execute(
-                "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,1)",
+                "INSERT INTO users (username, password_hash, role) VALUES (?,?,?)",
                 ('admin@example.com', generate_password_hash('admin1234'), 'admin'))
-            print("[INIT] Akun default dibuat: admin@example.com / admin1234 (wajib diganti saat login pertama).")
+            print("[INIT] Akun default dibuat: admin@example.com / admin1234 — ganti lewat Settings > Manajemen Akun.")
         # Akun 'user' contoh (role biasa, bukan admin) — untuk QA/demo peran
         # non-admin, skema lama tidak pernah punya ini jadi selalu dibuat baru.
         conn.execute(
-            "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,1)",
+            "INSERT INTO users (username, password_hash, role) VALUES (?,?,?)",
             ('test@example.com', generate_password_hash('test1234'), 'user'))
-        print("[INIT] Akun default dibuat: test@example.com / test1234 (role user, wajib diganti saat login pertama).")
+        print("[INIT] Akun default dibuat: test@example.com / test1234 — ganti lewat Settings > Manajemen Akun.")
         conn.commit()
 
     # Load saved settings
@@ -1473,7 +1468,7 @@ def register():
         return jsonify({'error': f'Password minimal {MIN_PASSWORD_LEN} karakter'}), 400
     try:
         db_execute(
-            "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,0)",
+            "INSERT INTO users (username, password_hash, role) VALUES (?,?,?)",
             (username, generate_password_hash(password), 'user'))
     except sqlite3.IntegrityError:
         return jsonify({'error': 'Username sudah dipakai'}), 409
@@ -1487,12 +1482,10 @@ def logout():
 @app.route('/api/auth/status')
 def auth_status():
     logged_in = bool(session.get('logged_in'))
-    uid = session.get('user_id')
     return jsonify({
         'logged_in': logged_in,
         'username': session.get('username') if logged_in else None,
         'role': session.get('role') if logged_in else None,
-        'must_change_password': _get_must_change_password(uid) if (logged_in and not DEMO_MODE and uid) else False,
         'demo_mode': DEMO_MODE,
     })
 
@@ -1534,33 +1527,12 @@ def healthz():
     code = 503 if snap['status'] == 'critical' else 200
     return jsonify(snap), code
 
-@app.route('/api/auth/change-password', methods=['POST'])
-@login_required
-@demo_readonly
-def change_password():
-    """Ganti password AKUN SENDIRI. Dipakai HANYA oleh alur wajib-ganti-password
-    default (ForcePasswordChange, lihat frontend) -- fitur "ganti password"
-    mandiri di Settings sudah dihapus karena tumpang tindih dengan admin
-    me-reset password lewat PUT /api/users/<id> (admin_required)."""
-    d = request.json or {}
-    current = d.get('current', '')
-    new_pw  = d.get('new', '')
-    uid = session.get('user_id')
-    row = db_execute("SELECT password_hash FROM users WHERE id=?", (uid,), fetchone=True)
-    if not row or not check_password_hash(row['password_hash'], current):
-        return jsonify({'error': 'Password lama salah'}), 401
-    if len(new_pw) < MIN_PASSWORD_LEN:
-        return jsonify({'error': f'Password baru minimal {MIN_PASSWORD_LEN} karakter'}), 400
-    db_execute("UPDATE users SET password_hash=?, must_change_password=0 WHERE id=?",
-               (generate_password_hash(new_pw), uid))
-    return jsonify({'ok': True})
-
 # ── Manajemen akun (admin only) ─────────────────────────────────────────────
 @app.route('/api/users', methods=['GET'])
 @admin_required
 def api_users_list():
     rows = db_execute(
-        "SELECT id, username, role, must_change_password, created_at FROM users ORDER BY id",
+        "SELECT id, username, role, created_at FROM users ORDER BY id",
         fetch=True)
     return jsonify(rows)
 
@@ -1580,7 +1552,7 @@ def api_users_create():
         return jsonify({'error': f'Password minimal {MIN_PASSWORD_LEN} karakter'}), 400
     try:
         uid = db_execute(
-            "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,1)",
+            "INSERT INTO users (username, password_hash, role) VALUES (?,?,?)",
             (username, generate_password_hash(password), role))
     except sqlite3.IntegrityError:
         return jsonify({'error': 'Username sudah dipakai'}), 409
@@ -1611,7 +1583,6 @@ def api_users_update(uid):
             return jsonify({'error': f'Password minimal {MIN_PASSWORD_LEN} karakter'}), 400
         fields.append("password_hash=?")
         params.append(generate_password_hash(d['password']))
-        fields.append("must_change_password=1")
     if not fields:
         return jsonify({'error': 'Tidak ada perubahan'}), 400
     params.append(uid)

@@ -50,8 +50,6 @@ export const login = (username, password) => post('/api/auth/login', { username,
 export const register = (username, password) => post('/api/auth/register', { username, password });
 export const logout = () => post('/api/auth/logout', {});
 export const authStatus = () => get('/api/auth/status');
-export const changePassword = (current, newPw) =>
-  post('/api/auth/change-password', { current, new: newPw });
 
 // ─── Manajemen Akun (admin only) ─────────────────────────────────────────────
 export const getUsers = () => get('/api/users');

@@ -6,7 +6,6 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   // 'loading' | 'authed' | 'guest'
   const [status, setStatus] = useState('loading');
-  const [mustChangePassword, setMustChangePassword] = useState(false);
   const [username, setUsername] = useState(null);
   const [role, setRole] = useState(null);
 
@@ -14,12 +13,10 @@ export function AuthProvider({ children }) {
     try {
       const r = await api.authStatus();
       setStatus(r?.logged_in ? 'authed' : 'guest');
-      setMustChangePassword(!!r?.must_change_password);
       setUsername(r?.username ?? null);
       setRole(r?.role ?? null);
     } catch {
       setStatus('guest');
-      setMustChangePassword(false);
       setUsername(null);
       setRole(null);
     }
@@ -40,7 +37,6 @@ export function AuthProvider({ children }) {
       await api.logout();
     } finally {
       setStatus('guest');
-      setMustChangePassword(false);
       setUsername(null);
       setRole(null);
     }
@@ -49,9 +45,7 @@ export function AuthProvider({ children }) {
   const isAdmin = role === 'admin';
 
   return (
-    <AuthContext.Provider
-      value={{ status, mustChangePassword, username, role, isAdmin, login: doLogin, logout: doLogout, refresh: checkAuth }}
-    >
+    <AuthContext.Provider value={{ status, username, role, isAdmin, login: doLogin, logout: doLogout, refresh: checkAuth }}>
       {children}
     </AuthContext.Provider>
   );

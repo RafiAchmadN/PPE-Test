@@ -204,27 +204,28 @@ Buka browser: `https://localhost:8443` (terima peringatan sertifikat
 self-signed di browser — sekali saja per browser).
 
 **Dua akun default dibuat otomatis saat pertama kali jalan** (lihat juga pesan
-di log startup container), keduanya wajib ganti password saat login pertama.
-Login pakai **email**, bukan username bebas:
+di log startup container). Login pakai **email**, bukan username bebas:
 
 | Email | Password default | Role | Bisa apa |
 |-------|-------------------|------|----------|
 | `admin@example.com` | `admin1234` | `admin` | Semua fitur, termasuk kelola kamera, Settings deteksi, dan Manajemen Akun (tambah/ubah role/reset password/hapus akun lain) |
 | `test@example.com`  | `test1234`  | `user`  | Lihat dashboard, live cameras, logs — tidak bisa kelola kamera/Settings/akun lain |
 
-Password minimal 8 karakter di semua endpoint yang set/ganti password.
+**Ganti password default ini lewat Settings → Manajemen Akun** (login sebagai
+admin, klik "Reset PW" pada baris akunnya sendiri atau akun lain) — tidak ada
+alur wajib-ganti-password terpisah, satu jalan saja lewat panel admin supaya
+tidak ada dua fitur yang tumpang tindih. Password minimal 8 karakter di semua
+endpoint yang set password.
+
 Pengunjung baru juga bisa **daftar sendiri** lewat tab "Daftar" di halaman
 login (username wajib format email) — akun hasil signup selalu dapat role
 `user` (tidak pernah `admin`, dipaksa di backend supaya tidak ada jalan
 eskalasi privilege lewat signup). Untuk menaikkan seseorang jadi admin, akun
-admin yang sudah ada perlu ubah role-nya lewat Settings → Manajemen Akun —
-di situ juga tempat admin reset password akun lain (tidak ada fitur "ganti
-password sendiri" yang terpisah lagi, supaya tidak ada dua jalan berbeda
-untuk hal yang sama; satu-satunya sisa alur ganti password mandiri adalah
-paksaan ganti password default di login pertama).
+admin yang sudah ada perlu ubah role-nya lewat Settings → Manajemen Akun.
 
-UI juga punya toggle mode terang/gelap (ikon matahari/bulan di pojok kanan
-atas dashboard) — preferensinya tersimpan per browser.
+UI juga punya toggle mode terang/gelap (ikon matahari/bulan, pojok kanan atas
+— muncul di SEMUA halaman termasuk Login/Daftar, bukan cuma dashboard).
+Preferensinya tersimpan per browser (localStorage), bukan per akun.
 
 ### 5. Update Setelah Pull
 ```bash
@@ -332,11 +333,11 @@ volumes:
   - **Merah**: Pelanggaran APD terdeteksi
 - Menu **Logs** → filter tanggal → lihat riwayat + snapshot
 
-### Ganti Password Default (login pertama)
-Login pertama kali (password masih default) otomatis diarahkan ke layar
-wajib-ganti-password sebelum bisa mengakses menu lain. Di luar itu, tidak
-ada fitur "ganti password sendiri" mandiri — untuk reset password (akun
-sendiri atau akun lain), admin lakukan lewat Settings → **Manajemen Akun**.
+### Ganti Password
+Tidak ada fitur "ganti password sendiri" di UI — satu-satunya jalan ganti
+password (akun sendiri atau akun lain) adalah admin lewat Settings →
+**Manajemen Akun** → "Reset PW". Ini sengaja: menghindari dua fitur berbeda
+untuk hal yang sama.
 
 ---
 
@@ -357,16 +358,16 @@ POST /api/auth/register              # Signup publik -- role SELALU "user", user
 {"username": "nama@contoh.com", "password": "..."}
 
 POST /api/auth/logout
-GET  /api/auth/status                # {"logged_in", "username", "role", "must_change_password", "demo_mode"}
-POST /api/auth/change-password       # {"current": "...", "new": "..."} — HANYA dipakai alur wajib-ganti-password
-                                      # default (bukan fitur mandiri di UI), dinonaktifkan saat DEMO_MODE
+GET  /api/auth/status                # {"logged_in", "username", "role", "demo_mode"}
 ```
+Tidak ada endpoint "ganti password sendiri" — reset password (akun sendiri
+atau akun lain) lewat `PUT /api/users/<id>` (admin only, lihat di bawah).
 
 ### Manajemen Akun (admin only)
 ```http
 GET    /api/users                    # List semua akun (tanpa password hash)
 POST   /api/users                    # {"username","password","role"} — buat akun baru
-PUT    /api/users/<id>                # {"role": "..."} dan/atau {"password": "..."} — reset password memaksa must_change_password lagi
+PUT    /api/users/<id>                # {"role": "..."} dan/atau {"password": "..."} — reset password akun manapun
 DELETE /api/users/<id>                # Hapus akun — tidak bisa hapus akun sendiri atau admin terakhir
 ```
 
@@ -440,23 +441,24 @@ CREATE TABLE app_settings (
     value TEXT
 );
 -- Keys: 'secret_key', plus setting deteksi (violation_delay, confidence, dst.)
--- 'admin_pw_hash' & 'must_change_password' di sini adalah sisa skema single-admin
--- lama -- dibaca sekali saat upgrade untuk migrasi ke tabel users, lalu tidak
--- dipakai lagi (boleh ada di DB lama, tidak masalah kalau tetap tersimpan).
+-- 'admin_pw_hash' di sini adalah sisa skema single-admin lama -- dibaca
+-- sekali saat upgrade untuk migrasi ke tabel users, lalu tidak dipakai lagi
+-- (boleh ada di DB lama, tidak masalah kalau tetap tersimpan).
 ```
 
 ### Tabel `users`
 ```sql
 CREATE TABLE users (
-    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-    username              TEXT NOT NULL UNIQUE,  -- format email, lihat _is_valid_email()
-    password_hash         TEXT NOT NULL,          -- minimal 8 karakter, lihat MIN_PASSWORD_LEN
-    role                  TEXT NOT NULL DEFAULT 'user',  -- 'admin' | 'user'
-    must_change_password  INTEGER NOT NULL DEFAULT 0,
-    created_at            TEXT DEFAULT (datetime('now','localtime'))
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT NOT NULL UNIQUE,          -- format email, lihat _is_valid_email()
+    password_hash TEXT NOT NULL,                 -- minimal 8 karakter, lihat MIN_PASSWORD_LEN
+    role          TEXT NOT NULL DEFAULT 'user',  -- 'admin' | 'user'
+    created_at    TEXT DEFAULT (datetime('now','localtime'))
 );
 -- Diisi otomatis saat pertama kali jalan: admin@example.com/admin1234 (role
 -- admin) dan test@example.com/test1234 (role user) -- lihat init_db().
+-- Tidak ada kolom must_change_password -- password diganti admin lewat
+-- Settings -> Manajemen Akun, tidak ada alur wajib-ganti-password terpisah.
 ```
 
 ---
@@ -522,10 +524,10 @@ PPE-Test/
 │   └── src/
 │       ├── App.jsx          # Routing (react-router-dom)
 │       ├── lib/api.js       # Klien fetch ke backend
-│       ├── context/         # AuthContext (status login + must_change_password)
-│       ├── hooks/           # useVisibleCameras (sinkron kamera aktif ↔ YOLO)
-│       ├── components/      # Sidebar, Topbar, StatCard, ComplianceMeter, dll
-│       └── pages/           # Dashboard, LiveCameras, CameraManagement, Logs, Settings, ForcePasswordChange
+│       ├── context/         # AuthContext (status login, role, isAdmin)
+│       ├── hooks/           # useVisibleCameras (sinkron kamera aktif ↔ YOLO), useTheme (terang/gelap)
+│       ├── components/      # Sidebar, Topbar, ThemeToggle (global, semua halaman), StatCard, dll
+│       └── pages/           # Dashboard, LiveCameras, CameraManagement, Logs, Settings
 ├── data/
 │   ├── violations/         # Snapshot JPEG pelanggaran
 │   ├── videos/             # File video untuk testing

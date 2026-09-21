@@ -1,12 +1,10 @@
 import { useEffect, useState } from 'react';
 import * as api from '../lib/api';
 import { asset } from '../lib/assets';
-import { useTheme } from '../hooks/useTheme';
 
 export default function Topbar() {
   const [clock, setClock] = useState('');
   const [serverAddr, setServerAddr] = useState('');
-  const { isDark, toggleTheme } = useTheme();
 
   useEffect(() => {
     const tick = () =>
@@ -33,7 +31,10 @@ export default function Topbar() {
   }, []);
 
   return (
-    <div className="h-14 flex items-center justify-between px-7 bg-base-100 border-b border-base-300 flex-shrink-0">
+    // pr-16 (bukan px-7 simetris): kasih ruang buat <ThemeToggle> yang
+    // posisinya fixed di pojok kanan atas layar (lihat App.jsx), supaya teks
+    // jam/alamat jaringan di sini tidak ketiban tombolnya.
+    <div className="h-14 flex items-center justify-between pl-7 pr-16 bg-base-100 border-b border-base-300 flex-shrink-0">
       <h1 className="text-lg font-semibold flex items-center gap-2.5 text-base-content">
         <img src={asset('heti-icon.png')} alt="" className="h-[22px] w-[22px] object-contain bg-white rounded p-0.5 flex-shrink-0" />
         <span className="inline-block w-2 h-2 rounded-full bg-success animate-pulse"></span>
@@ -46,30 +47,6 @@ export default function Topbar() {
           </span>
         )}
         <span className="text-xs text-base-content/40 font-mono-app">{clock}</span>
-        <button
-          type="button"
-          onClick={toggleTheme}
-          title={isDark ? 'Mode terang' : 'Mode gelap'}
-          className="btn btn-ghost btn-square btn-sm text-base-content/60"
-        >
-          {isDark ? (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="5" />
-              <line x1="12" y1="1" x2="12" y2="3" />
-              <line x1="12" y1="21" x2="12" y2="23" />
-              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-              <line x1="1" y1="12" x2="3" y2="12" />
-              <line x1="21" y1="12" x2="23" y2="12" />
-              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-            </svg>
-          ) : (
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
-            </svg>
-          )}
-        </button>
       </div>
     </div>
   );

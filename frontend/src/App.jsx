@@ -3,13 +3,13 @@ import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Sidebar from './components/Sidebar';
 import Topbar from './components/Topbar';
+import ThemeToggle from './components/ThemeToggle';
 
 // Code-split per halaman — sebelumnya semua page (termasuk chart/table di
 // Dashboard & Logs) di-bundle jadi satu file JS yang harus diunduh penuh
 // sebelum layar login pun sempat tampil. Tiap import() di bawah jadi chunk
 // terpisah yang baru diambil browser saat route-nya benar-benar dikunjungi.
 const Login = lazy(() => import('./pages/Login'));
-const ForcePasswordChange = lazy(() => import('./pages/ForcePasswordChange'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const LiveCameras = lazy(() => import('./pages/LiveCameras'));
 const CameraManagement = lazy(() => import('./pages/CameraManagement'));
@@ -25,10 +25,9 @@ function FullScreenSpinner() {
 }
 
 function ProtectedLayout() {
-  const { status, mustChangePassword } = useAuth();
+  const { status } = useAuth();
   if (status === 'loading') return <FullScreenSpinner />;
   if (status === 'guest') return <Navigate to="/login" replace />;
-  if (mustChangePassword) return <ForcePasswordChange />;
   return (
     <div className="flex h-screen overflow-hidden bg-base-200">
       <Sidebar />
@@ -69,6 +68,9 @@ export default function App() {
     // asset (termasuk override VITE_BASE kalau suatu saat pindah subpath).
     <BrowserRouter basename={import.meta.env.BASE_URL}>
       <AuthProvider>
+        {/* Di luar <Routes> supaya tampil di SEMUA halaman -- termasuk Login,
+            yang tidak dibungkus ProtectedLayout/Topbar. */}
+        <ThemeToggle />
         <Suspense fallback={<FullScreenSpinner />}>
           <Routes>
             <Route
