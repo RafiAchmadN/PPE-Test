@@ -282,6 +282,28 @@ export default function Settings() {
             onChange={(e) => updateField('stream_fps', e.target.value)}
           />
         </SettingRow>
+        <SettingRow label="Stream Width" desc="Lebar frame video (px) — turunkan kalau koneksi lambat/lewat VPN sempit, tiap frame jadi lebih kecil">
+          <input
+            type="number"
+            min="160"
+            max="1280"
+            step="40"
+            className="input input-bordered w-[100px] text-right font-mono-app"
+            value={settings.stream_width}
+            onChange={(e) => updateField('stream_width', e.target.value)}
+          />
+        </SettingRow>
+        <SettingRow label="Stream Quality" desc="Kualitas JPEG stream (1-100) — makin rendah, frame makin kecil tapi makin buram">
+          <input
+            type="number"
+            min="10"
+            max="95"
+            step="5"
+            className="input input-bordered w-[100px] text-right font-mono-app"
+            value={settings.stream_quality}
+            onChange={(e) => updateField('stream_quality', e.target.value)}
+          />
+        </SettingRow>
         <SettingRow label="AI Inference" desc="Enable/disable YOLO detection on camera feeds" last>
           <input
             type="checkbox"

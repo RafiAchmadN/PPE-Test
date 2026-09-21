@@ -185,6 +185,17 @@ settings = {
     'person_confidence': 0.7,   # threshold khusus class Person (lebih tinggi = kurangi false detect)
     'inference_enabled': True,
     'stream_fps': 5,             # max fps for MJPEG stream
+    'stream_width': 480,        # lebar resize frame stream (px) — sebelumnya
+                                 # hardcode 640 tanpa bisa diatur. Diturunkan
+                                 # dari 640 karena di lapangan (koneksi lewat
+                                 # VPN dengan bandwidth ~7-10 KB/s) satu frame
+                                 # 640px/quality 60 bisa >100KB dan bikin
+                                 # stream macet total — lihat percakapan soal
+                                 # analisis profiler jaringan.
+    'stream_quality': 45,        # JPEG quality stream (1-100) — sebelumnya
+                                 # hardcode 60. Diturunkan supaya frame lebih
+                                 # kecil di koneksi lambat; naikkan lagi kalau
+                                 # bandwidth-nya sebenarnya cukup.
 }
 
 # ─── DATABASE ────────────────────────────────────────────────────────────────
@@ -1311,9 +1322,10 @@ class CameraStream:
                 return self._jpeg_cache
             frame = self._frame
             h, w = frame.shape[:2]
-            if w > 640:
-                frame = cv2.resize(frame, (640, int(h * 640 / w)))
-            _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+            target_w = settings['stream_width']
+            if w > target_w:
+                frame = cv2.resize(frame, (target_w, int(h * target_w / w)))
+            _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, settings['stream_quality']])
             jpeg = buf.tobytes()
             self._jpeg_cache = jpeg
             self._jpeg_cache_version = self._frame_version
@@ -1928,7 +1940,7 @@ def api_settings_get():
 @demo_readonly
 def api_settings_update():
     d = request.json
-    for k in ['violation_delay', 'confidence', 'person_confidence', 'stream_fps']:
+    for k in ['violation_delay', 'confidence', 'person_confidence', 'stream_fps', 'stream_width', 'stream_quality']:
         if k in d:
             try:
                 settings[k] = int(float(d[k])) if isinstance(settings[k], int) else float(d[k])
