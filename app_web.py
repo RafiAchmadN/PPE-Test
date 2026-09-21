@@ -516,10 +516,27 @@ def init_db():
     # butuh belasan detik. CREATE INDEX IF NOT EXISTS aman dijalankan tiap
     # startup -- baru benar-benar membangun index sekali (bisa makan waktu
     # kalau tabelnya sudah besar), setelah itu tinggal no-op cepat.
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_data_tanggal ON data(Tanggal)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_data_bukti ON data(Bukti)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_data_jenis ON data(jenis)")
-    conn.commit()
+    # DatabaseError di sini ('database disk image is malformed', dst.) berarti
+    # logging.db SUDAH korup dari sebelumnya -- CREATE INDEX cuma yang pertama
+    # kali men-scan SELURUH tabel jadi yang pertama nemu halaman rusaknya.
+    # Sengaja TIDAK di-raise ulang: mati total di sini (lalu crash-loop selamanya
+    # karena korupsinya tidak hilang sendiri lewat restart) jauh lebih buruk
+    # daripada jalan tanpa index ini (query jadi lambat lagi, tapi service
+    # tetap hidup) sambil DB-nya diperbaiki terpisah (restore dari ./backups/
+    # atau PRAGMA integrity_check + recovery manual).
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_data_tanggal ON data(Tanggal)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_data_bukti ON data(Bukti)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_data_jenis ON data(jenis)")
+        conn.commit()
+    except sqlite3.DatabaseError as e:
+        print(f"[DB ERROR] Gagal bangun index di tabel 'data': {e}")
+        print("[DB ERROR] logging.db kemungkinan besar KORUP -- ini bukan disebabkan")
+        print("[DB ERROR] index ini, cuma pertama kali ketahuan. Cek separahnya:")
+        print("[DB ERROR]   sqlite3 logging.db \"PRAGMA integrity_check;\"")
+        print("[DB ERROR] Kalau ada snapshot bagus di ./backups/logging_<tanggal>.db,")
+        print("[DB ERROR] itu jalan pemulihan paling aman (backup dibuat harian, lihat _backup_worker).")
+        print("[DB ERROR] Aplikasi tetap lanjut jalan TANPA index ini supaya service tidak down total.")
 
     # Persistent secret key (survives restart)
     row = conn.execute("SELECT value FROM app_settings WHERE key='secret_key'").fetchone()
