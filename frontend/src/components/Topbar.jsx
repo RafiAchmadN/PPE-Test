@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import * as api from '../lib/api';
+import { asset } from '../lib/assets';
 
 export default function Topbar() {
   const [clock, setClock] = useState('');
@@ -32,7 +33,7 @@ export default function Topbar() {
   return (
     <div className="h-14 flex items-center justify-between px-7 bg-base-100 border-b border-base-300 flex-shrink-0">
       <h1 className="text-lg font-semibold flex items-center gap-2.5 text-base-content">
-        <img src="/heti-icon.png" alt="" className="h-[22px] w-[22px] object-contain bg-white rounded p-0.5 flex-shrink-0" />
+        <img src={asset('heti-icon.png')} alt="" className="h-[22px] w-[22px] object-contain bg-white rounded p-0.5 flex-shrink-0" />
         <span className="inline-block w-2 h-2 rounded-full bg-success animate-pulse"></span>
         PPE Monitoring System
       </h1>

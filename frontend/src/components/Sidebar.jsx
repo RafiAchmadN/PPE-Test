@@ -1,5 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { asset } from '../lib/assets';
 
 const navItems = [
   {
@@ -84,7 +85,7 @@ export default function Sidebar() {
   return (
     <aside className="w-[72px] bg-neutral flex flex-col items-center py-4 flex-shrink-0 z-[100]">
       <div className="w-[42px] h-[42px] rounded-xl bg-white flex items-center justify-center mb-8 p-1.5">
-        <img src="/heti-icon.png" alt="HETI" className="w-full h-full object-contain" />
+        <img src={asset('heti-icon.png')} alt="HETI" className="w-full h-full object-contain" />
       </div>
 
       <nav className="flex flex-col gap-1 w-full items-center">
