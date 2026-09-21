@@ -47,10 +47,17 @@ const del = (path) => request(path, { method: 'DELETE' });
 
 // ─── Auth ──────────────────────────────────────────────────────────────────
 export const login = (username, password) => post('/api/auth/login', { username, password });
+export const register = (username, password) => post('/api/auth/register', { username, password });
 export const logout = () => post('/api/auth/logout', {});
 export const authStatus = () => get('/api/auth/status');
 export const changePassword = (current, newPw) =>
   post('/api/auth/change-password', { current, new: newPw });
+
+// ─── Manajemen Akun (admin only) ─────────────────────────────────────────────
+export const getUsers = () => get('/api/users');
+export const createUser = (u) => post('/api/users', u);
+export const updateUser = (id, u) => put(`/api/users/${id}`, u);
+export const deleteUser = (id) => del(`/api/users/${id}`);
 
 // ─── Info ──────────────────────────────────────────────────────────────────
 export const getInfo = () => get('/api/info');

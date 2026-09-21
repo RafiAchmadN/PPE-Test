@@ -29,6 +29,7 @@ const navItems = [
   {
     to: '/manage',
     title: 'Camera Management',
+    adminOnly: true,
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <circle cx="12" cy="12" r="3" />
@@ -74,7 +75,7 @@ const navLinkClass = ({ isActive }) =>
 
 export default function Sidebar() {
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { logout, isAdmin } = useAuth();
 
   async function handleLogout() {
     if (!confirm('Keluar dari sistem?')) return;
@@ -89,24 +90,28 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex flex-col gap-1 w-full items-center">
-        {navItems.map((item) => (
-          <NavLink key={item.to} to={item.to} end={item.end} title={item.title} className={navLinkClass}>
-            <span className="w-[22px] h-[22px]">{item.icon}</span>
-          </NavLink>
-        ))}
+        {navItems
+          .filter((item) => !item.adminOnly || isAdmin)
+          .map((item) => (
+            <NavLink key={item.to} to={item.to} end={item.end} title={item.title} className={navLinkClass}>
+              <span className="w-[22px] h-[22px]">{item.icon}</span>
+            </NavLink>
+          ))}
       </nav>
 
       <div className="mt-auto flex flex-col gap-1 pb-2">
-        <NavLink
-          to="/manage"
-          title="Tambah Kamera Baru"
-          className="btn btn-square btn-primary"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-[22px] h-[22px]">
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </NavLink>
+        {isAdmin && (
+          <NavLink
+            to="/manage"
+            title="Tambah Kamera Baru"
+            className="btn btn-square btn-primary"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-[22px] h-[22px]">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </NavLink>
+        )}
         <button
           type="button"
           onClick={handleLogout}

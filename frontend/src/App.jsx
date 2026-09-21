@@ -49,6 +49,16 @@ function PublicOnlyRoute({ children }) {
   return children;
 }
 
+function AdminOnlyRoute({ children }) {
+  // Backend sudah menolak endpoint kamera untuk role non-admin (403) --
+  // guard ini cuma defense-in-depth di UI, supaya akun 'user' yang buka
+  // /manage langsung lewat URL tidak nyasar ke halaman yang tombol-tombolnya
+  // pasti gagal, langsung dibalikin ke dashboard.
+  const { isAdmin } = useAuth();
+  if (!isAdmin) return <Navigate to="/" replace />;
+  return children;
+}
+
 export default function App() {
   return (
     // basename WAJIB disamakan dengan Vite `base` (vite.config.js) — tanpa ini,
@@ -72,7 +82,14 @@ export default function App() {
             <Route path="/" element={<ProtectedLayout />}>
               <Route index element={<Dashboard />} />
               <Route path="cameras" element={<LiveCameras />} />
-              <Route path="manage" element={<CameraManagement />} />
+              <Route
+                path="manage"
+                element={
+                  <AdminOnlyRoute>
+                    <CameraManagement />
+                  </AdminOnlyRoute>
+                }
+              />
               <Route path="logs" element={<Logs />} />
               <Route path="settings" element={<Settings />} />
             </Route>

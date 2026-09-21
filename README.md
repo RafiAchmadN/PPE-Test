@@ -202,9 +202,19 @@ docker compose -f docker-compose.prod.yml logs -f
 Buka browser: `https://localhost:8443` (terima peringatan sertifikat
 self-signed di browser — sekali saja per browser).
 
-**Login pertama kali wajib ganti password default** (`admin` / lihat pesan di
-log startup container) — dashboard akan otomatis meminta ganti password
-sebelum bisa mengakses fitur lain.
+**Dua akun default dibuat otomatis saat pertama kali jalan** (lihat juga pesan
+di log startup container), keduanya wajib ganti password saat login pertama:
+
+| Username | Password default | Role | Bisa apa |
+|----------|-------------------|------|----------|
+| `admin`  | `admin123`        | `admin` | Semua fitur, termasuk kelola kamera, Settings deteksi, dan Manajemen Akun (tambah/ubah role/reset password/hapus akun lain) |
+| `test`   | `test123`         | `user`  | Lihat dashboard, live cameras, logs, dan ganti password sendiri — tidak bisa kelola kamera/Settings/akun lain |
+
+Pengunjung baru juga bisa **daftar sendiri** lewat tab "Daftar" di halaman
+login — akun hasil signup selalu dapat role `user` (tidak pernah `admin`,
+dipaksa di backend supaya tidak ada jalan eskalasi privilege lewat signup).
+Untuk menaikkan seseorang jadi admin, akun admin yang sudah ada perlu ubah
+role-nya lewat Settings → Manajemen Akun.
 
 ### 5. Update Setelah Pull
 ```bash
@@ -323,7 +333,8 @@ sebelum bisa mengakses menu lain.
 
 Backend (`https://localhost:5443` lewat proxy) adalah JSON API murni — semua
 endpoint `/api/*` memerlukan autentikasi (session cookie, credentials
-cross-origin lewat CORS).
+cross-origin lewat CORS). Endpoint bertanda **admin only** menolak akun
+role `user` dengan `403`.
 
 ### Autentikasi
 ```http
@@ -331,23 +342,35 @@ POST /api/auth/login
 Content-Type: application/json
 {"username": "admin", "password": "<password admin>"}
 
+POST /api/auth/register              # Signup publik -- role SELALU "user"
+{"username": "...", "password": "..."}
+
 POST /api/auth/logout
-GET  /api/auth/status                # {"logged_in", "must_change_password", "demo_mode"}
-POST /api/auth/change-password       # {"current": "...", "new": "..."} — dinonaktifkan saat DEMO_MODE
+GET  /api/auth/status                # {"logged_in", "username", "role", "must_change_password", "demo_mode"}
+POST /api/auth/change-password       # {"current": "...", "new": "..."} — ganti password AKUN SENDIRI, dinonaktifkan saat DEMO_MODE
 ```
 
-### Kamera
+### Manajemen Akun (admin only)
 ```http
-GET    /api/cameras                  # List kamera + status online/fps — URL disamarkan (kredensial disembunyikan)
-GET    /api/cameras/<id>             # Detail 1 kamera dengan URL lengkap (dipakai form edit)
+GET    /api/users                    # List semua akun (tanpa password hash)
+POST   /api/users                    # {"username","password","role"} — buat akun baru
+PUT    /api/users/<id>                # {"role": "..."} dan/atau {"password": "..."} — reset password memaksa must_change_password lagi
+DELETE /api/users/<id>                # Hapus akun — tidak bisa hapus akun sendiri atau admin terakhir
+```
+
+### Kamera (semua kecuali list & visible admin only)
+```http
+GET    /api/cameras                  # List kamera + status online/fps — URL disamarkan (kredensial disembunyikan), semua role
+GET    /api/cameras/<id>             # admin only — URL LENGKAP termasuk kredensial (dipakai form edit)
 POST   /api/cameras                  # Tambah kamera baru — dinonaktifkan saat DEMO_MODE
 PUT    /api/cameras/<id>             # Update kamera — dinonaktifkan saat DEMO_MODE
 DELETE /api/cameras/<id>             # Hapus kamera — dinonaktifkan saat DEMO_MODE
 POST   /api/cameras/visible          # {"ids":[1,2]} kamera yang tertampil di frontend saat ini
-                                      # (membatasi YOLO inference — kirim {"ids":null} untuk lepas batas)
+                                      # (membatasi YOLO inference — kirim {"ids":null} untuk lepas batas;
+                                      # endpoint ini boleh dipanggil role user, bukan cuma admin)
 ```
 
-### Streaming & Upload Video
+### Streaming & Upload Video (upload/delete admin only)
 ```http
 GET    /api/stream/<camera_id>       # MJPEG stream (multipart/x-mixed-replace)
 GET    /api/videos                   # List video yang sudah di-upload
@@ -363,7 +386,7 @@ GET /api/logs?start=YYYY-MM-DD&end=YYYY-MM-DD&limit=200  # Riwayat pelanggaran
 GET /foto/<filename>                 # Snapshot bukti pelanggaran (JPEG)
 ```
 
-### Settings
+### Settings (PUT admin only)
 ```http
 GET /api/settings                    # Baca pengaturan saat ini
 PUT /api/settings                    # Update pengaturan
@@ -373,7 +396,7 @@ PUT /api/settings                    # Update pengaturan
 
 ## Skema Database
 
-Database SQLite (`logging.db`) memiliki 3 tabel:
+Database SQLite (`logging.db`) memiliki 4 tabel:
 
 ### Tabel `cameras`
 ```sql
@@ -404,7 +427,24 @@ CREATE TABLE app_settings (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
--- Keys: 'secret_key', 'admin_pw_hash'
+-- Keys: 'secret_key', plus setting deteksi (violation_delay, confidence, dst.)
+-- 'admin_pw_hash' & 'must_change_password' di sini adalah sisa skema single-admin
+-- lama -- dibaca sekali saat upgrade untuk migrasi ke tabel users, lalu tidak
+-- dipakai lagi (boleh ada di DB lama, tidak masalah kalau tetap tersimpan).
+```
+
+### Tabel `users`
+```sql
+CREATE TABLE users (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    username              TEXT NOT NULL UNIQUE,
+    password_hash         TEXT NOT NULL,
+    role                  TEXT NOT NULL DEFAULT 'user',  -- 'admin' | 'user'
+    must_change_password  INTEGER NOT NULL DEFAULT 0,
+    created_at            TEXT DEFAULT (datetime('now','localtime'))
+);
+-- Diisi otomatis saat pertama kali jalan: admin/admin123 (role admin) dan
+-- test/test123 (role user) -- lihat init_db() di app_web.py.
 ```
 
 ---

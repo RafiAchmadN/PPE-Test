@@ -48,7 +48,7 @@ appliance single-tenant yang dipilih.
 | S3 | `logging.db` (berisi hash password admin & data pelanggaran) pernah ter-*commit* ke git history (`git log --all -- logging.db` → 3 commit lama) meski sudah di-`.gitignore` sekarang | Siapa pun yang clone history lengkap repo bisa ambil file DB lama | **High** |
 | S4 | Default password `admin123` tercetak di README & di-print ke stdout Docker log saat start, tanpa paksa ganti password di login pertama | Kredensial default adalah vektor serangan #1 untuk perangkat IoT/monitoring yang dipasang lalu dilupakan | **High** |
 | S5 | Tidak ada rate limiting / lockout di `POST /api/auth/login` maupun `POST /api/auth/change-password` | Brute-force password tidak terdeteksi/terhambat sama sekali | **High** |
-| S6 | Kredensial kamera (RTSP/DVRIP: `user:pass@host`) disimpan plaintext di kolom `cameras.url`, dan dikembalikan apa adanya oleh `GET /api/cameras` ke siapa pun yang login | Satu akun yang bocor = semua kredensial kamera pelanggan ikut bocor; tidak ada pemisahan "lihat status kamera" vs "lihat kredensial" | **High** |
+| S6 | Kredensial kamera (RTSP/DVRIP: `user:pass@host`) disimpan plaintext di kolom `cameras.url`. **SEBAGIAN teratasi**: `GET /api/cameras/<id>` (satu-satunya endpoint yang mengembalikan URL lengkap tak tersamar) sekarang `admin_required`, bukan sekadar `login_required` — akun role `user` cuma bisa lihat versi tersamar lewat `GET /api/cameras` (list). Yang belum: URL-nya sendiri masih plaintext di kolom DB (bukan terenkripsi at-rest) | Satu akun **admin** yang bocor tetap membocorkan semua kredensial kamera; akun `user` biasa sudah tidak bisa lagi | **Medium** (diturunkan dari High) |
 | S7 | `SECRET_KEY` punya fallback hardcoded `'ppe-monitor-default-change-me-2026'` di source (baris 57) — meski `init_db()` menimpanya dengan key acak persisten saat startup normal | Kalau alur `init_db()` gagal/dilewati (mis. refactor mendatang), aplikasi diam-diam jalan dengan secret key publik yang ada di source code | **Medium** |
 | S8 | Tidak ada CSRF token untuk endpoint state-changing (`POST/PUT/DELETE`); hanya mengandalkan `SameSite=Lax` cookie | `SameSite=Lax` tidak melindungi dari semua skenario CSRF (mis. navigasi top-level, subdomain nakal) | **Medium** |
 | S9 | Tidak ada `MAX_CONTENT_LENGTH` di Flask & tidak ada validasi *magic bytes* pada `/api/videos/upload` (hanya cek ekstensi) | Upload file besar berulang → disk penuh (DoS); file dengan ekstensi `.mp4` tapi isi bukan video tidak divalidasi | **Medium** |
@@ -347,7 +347,10 @@ lokal pelanggan.
 ### P2 — peningkatan/skala (sesuai pertumbuhan)
 - [ ] Evaluasi migrasi ke PostgreSQL (hanya jika data capacity test
       menunjukkan SQLite jadi bottleneck nyata) (D5)
-- [ ] RBAC multi-user staff (bukan cuma 1 akun admin)
+- [x] RBAC multi-user staff (bukan cuma 1 akun admin) — tabel `users` (role
+      `admin`/`user`), signup publik (selalu role `user`), dan Settings →
+      Manajemen Akun (admin CRUD akun lain). Masih 2 role datar, belum ada
+      permission granular per-kamera/per-fitur di luar admin-vs-user
 - [ ] Dependency vulnerability scanning otomatis (pip-audit/npm audit) (S13)
 - [ ] Abstraksi storage backend untuk opsi NAS/object storage (§7.7)
 - [ ] Index & FK referensial database (D1, D2), migration tooling (D3)

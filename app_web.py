@@ -130,6 +130,19 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated
 
+def admin_required(f):
+    """Kayak login_required, tapi role di session juga harus 'admin' — dipakai
+    untuk endpoint yang mengubah konfigurasi sistem (kamera, settings, akun
+    user lain), bukan sekadar melihat dashboard."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('logged_in'):
+            return jsonify({'error': 'Unauthorized'}), 401
+        if session.get('role') != 'admin':
+            return jsonify({'error': 'Perlu akses admin'}), 403
+        return f(*args, **kwargs)
+    return decorated
+
 def demo_readonly(f):
     """Blokir endpoint yang mengubah state saat DEMO_MODE aktif — demo publik
     hanya boleh dilihat-lihat, tidak boleh diubah oleh pengunjung anonim."""
@@ -145,6 +158,7 @@ def _demo_auto_login():
     if DEMO_MODE and not session.get('logged_in'):
         session['logged_in'] = True
         session['demo_guest'] = True
+        session['role'] = 'user'
 
 def get_local_ip():
     try:
@@ -196,9 +210,13 @@ def db_execute(query, params=(), fetch=False, fetchone=False):
 RETENTION_DAYS = 30  # hapus data lebih lama dari N hari (0 = tidak hapus)
 BACKUP_RETENTION_DAYS = int(os.environ.get('BACKUP_RETENTION_DAYS', '14'))
 
-def _get_must_change_password():
-    row = db_execute("SELECT value FROM app_settings WHERE key='must_change_password'", fetchone=True)
-    return bool(row) and row['value'] == '1'
+def _get_must_change_password(user_id):
+    row = db_execute("SELECT must_change_password FROM users WHERE id=?", (user_id,), fetchone=True)
+    return bool(row) and row['must_change_password'] == 1
+
+def _admin_count():
+    row = db_execute("SELECT COUNT(*) c FROM users WHERE role='admin'", fetchone=True)
+    return row['c'] if row else 0
 
 def _mask_url(url):
     """Sembunyikan kredensial (user:pass@) dari URL kamera untuk response list.
@@ -400,6 +418,14 @@ def init_db():
     conn.execute("""CREATE TABLE IF NOT EXISTS app_settings (
         key TEXT PRIMARY KEY, value TEXT
     )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        must_change_password INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now','localtime'))
+    )""")
     conn.commit()
 
     # ── Add 'jenis' column if missing (existing DB migration) ──
@@ -422,22 +448,33 @@ def init_db():
     else:
         app.secret_key = row[0]
 
-    # Default admin password: admin123 — wajib diganti di login pertama (must_change_password)
-    row = conn.execute("SELECT value FROM app_settings WHERE key='admin_pw_hash'").fetchone()
-    if not row:
-        conn.execute("INSERT INTO app_settings (key,value) VALUES ('admin_pw_hash',?)",
-                     (generate_password_hash('admin123'),))
-        conn.execute("INSERT OR REPLACE INTO app_settings (key,value) VALUES ('must_change_password','1')")
+    # Akun default — cuma dibuat kalau tabel users masih benar-benar kosong,
+    # supaya ini murni jalan satu kali (baik instance baru maupun upgrade dari
+    # skema single-admin lama), tidak pernah menimpa akun yang sudah dibuat user.
+    user_count = conn.execute("SELECT COUNT(*) c FROM users").fetchone()[0]
+    if user_count == 0:
+        # Migrasi dari skema lama (satu admin_pw_hash di app_settings) kalau ada
+        # — supaya password yang sudah diganti user TIDAK di-reset ke admin123.
+        old_hash = conn.execute("SELECT value FROM app_settings WHERE key='admin_pw_hash'").fetchone()
+        if old_hash:
+            old_mcp = conn.execute("SELECT value FROM app_settings WHERE key='must_change_password'").fetchone()
+            mcp = 1 if (old_mcp is None or old_mcp[0] == '1') else 0
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,?)",
+                ('admin', old_hash[0], 'admin', mcp))
+            print("[MIGRATE] Akun 'admin' lama dipindah ke tabel users (password tidak berubah).")
+        else:
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,1)",
+                ('admin', generate_password_hash('admin123'), 'admin'))
+            print("[INIT] Akun default dibuat: admin / admin123 (wajib diganti saat login pertama).")
+        # Akun 'test' (role biasa, bukan admin) — untuk QA/demo peran non-admin,
+        # skema lama tidak pernah punya ini jadi selalu dibuat baru di sini.
+        conn.execute(
+            "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,1)",
+            ('test', generate_password_hash('test123'), 'user'))
+        print("[INIT] Akun default dibuat: test / test123 (role user, wajib diganti saat login pertama).")
         conn.commit()
-    else:
-        # Migrasi instance lama: paksa ganti password kalau ternyata masih memakai
-        # default admin123 (instance yang sudah diganti passwordnya tidak diganggu).
-        mcp_row = conn.execute("SELECT value FROM app_settings WHERE key='must_change_password'").fetchone()
-        if mcp_row is None:
-            still_default = check_password_hash(row['value'], 'admin123')
-            conn.execute("INSERT OR REPLACE INTO app_settings (key,value) VALUES ('must_change_password',?)",
-                         ('1' if still_default else '0',))
-            conn.commit()
 
     # Load saved settings
     for row in conn.execute("SELECT key, value FROM app_settings").fetchall():
@@ -1392,14 +1429,37 @@ def login_post():
     d = request.json or {}
     username = d.get('username', '').strip()
     password = d.get('password', '')
-    if username != 'admin':
+    row = db_execute("SELECT id, password_hash, role FROM users WHERE username=?", (username,), fetchone=True)
+    if not row or not check_password_hash(row['password_hash'], password):
         return jsonify({'error': 'Username atau password salah'}), 401
-    row = db_execute("SELECT value FROM app_settings WHERE key='admin_pw_hash'", fetchone=True)
-    if not row or not check_password_hash(row['value'], password):
-        return jsonify({'error': 'Username atau password salah'}), 401
+    session.clear()
     session['logged_in'] = True
+    session['user_id'] = row['id']
+    session['username'] = username
+    session['role'] = row['role']
     session.permanent = True
     return jsonify({'ok': True})
+
+@app.route('/api/auth/register', methods=['POST'])
+@limiter.limit("10 per minute")
+@demo_readonly
+def register():
+    """Signup publik — SELALU role 'user', tidak pernah menerima role dari
+    client, supaya tidak ada jalan bikin akun admin lewat endpoint ini."""
+    d = request.json or {}
+    username = (d.get('username') or '').strip()
+    password = d.get('password') or ''
+    if len(username) < 3:
+        return jsonify({'error': 'Username minimal 3 karakter'}), 400
+    if len(password) < 6:
+        return jsonify({'error': 'Password minimal 6 karakter'}), 400
+    try:
+        db_execute(
+            "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,0)",
+            (username, generate_password_hash(password), 'user'))
+    except sqlite3.IntegrityError:
+        return jsonify({'error': 'Username sudah dipakai'}), 409
+    return jsonify({'ok': True}), 201
 
 @app.route('/api/auth/logout', methods=['POST'])
 def logout():
@@ -1409,9 +1469,12 @@ def logout():
 @app.route('/api/auth/status')
 def auth_status():
     logged_in = bool(session.get('logged_in'))
+    uid = session.get('user_id')
     return jsonify({
         'logged_in': logged_in,
-        'must_change_password': _get_must_change_password() if (logged_in and not DEMO_MODE) else False,
+        'username': session.get('username') if logged_in else None,
+        'role': session.get('role') if logged_in else None,
+        'must_change_password': _get_must_change_password(uid) if (logged_in and not DEMO_MODE and uid) else False,
         'demo_mode': DEMO_MODE,
     })
 
@@ -1457,17 +1520,96 @@ def healthz():
 @login_required
 @demo_readonly
 def change_password():
+    """Ganti password AKUN SENDIRI (siapapun yang login, admin atau user).
+    Untuk reset password akun lain, lihat PUT /api/users/<id> (admin_required)."""
     d = request.json or {}
     current = d.get('current', '')
     new_pw  = d.get('new', '')
-    row = db_execute("SELECT value FROM app_settings WHERE key='admin_pw_hash'", fetchone=True)
-    if not row or not check_password_hash(row['value'], current):
+    uid = session.get('user_id')
+    row = db_execute("SELECT password_hash FROM users WHERE id=?", (uid,), fetchone=True)
+    if not row or not check_password_hash(row['password_hash'], current):
         return jsonify({'error': 'Password lama salah'}), 401
     if len(new_pw) < 6:
         return jsonify({'error': 'Password baru minimal 6 karakter'}), 400
-    db_execute("INSERT OR REPLACE INTO app_settings (key,value) VALUES ('admin_pw_hash',?)",
-               (generate_password_hash(new_pw),))
-    db_execute("INSERT OR REPLACE INTO app_settings (key,value) VALUES ('must_change_password','0')")
+    db_execute("UPDATE users SET password_hash=?, must_change_password=0 WHERE id=?",
+               (generate_password_hash(new_pw), uid))
+    return jsonify({'ok': True})
+
+# ── Manajemen akun (admin only) ─────────────────────────────────────────────
+@app.route('/api/users', methods=['GET'])
+@admin_required
+def api_users_list():
+    rows = db_execute(
+        "SELECT id, username, role, must_change_password, created_at FROM users ORDER BY id",
+        fetch=True)
+    return jsonify(rows)
+
+@app.route('/api/users', methods=['POST'])
+@admin_required
+@demo_readonly
+def api_users_create():
+    d = request.json or {}
+    username = (d.get('username') or '').strip()
+    password = d.get('password') or ''
+    role = d.get('role') or 'user'
+    if role not in ('admin', 'user'):
+        return jsonify({'error': 'Role tidak valid'}), 400
+    if len(username) < 3:
+        return jsonify({'error': 'Username minimal 3 karakter'}), 400
+    if len(password) < 6:
+        return jsonify({'error': 'Password minimal 6 karakter'}), 400
+    try:
+        uid = db_execute(
+            "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,1)",
+            (username, generate_password_hash(password), role))
+    except sqlite3.IntegrityError:
+        return jsonify({'error': 'Username sudah dipakai'}), 409
+    return jsonify({'ok': True, 'id': uid}), 201
+
+@app.route('/api/users/<int:uid>', methods=['PUT'])
+@admin_required
+@demo_readonly
+def api_users_update(uid):
+    d = request.json or {}
+    row = db_execute("SELECT id, role FROM users WHERE id=?", (uid,), fetchone=True)
+    if not row:
+        return jsonify({'error': 'Akun tidak ditemukan'}), 404
+
+    fields, params = [], []
+    if 'role' in d:
+        role = d['role']
+        if role not in ('admin', 'user'):
+            return jsonify({'error': 'Role tidak valid'}), 400
+        # Cegah admin terakhir diturunkan jadi user biasa -- sistem jadi tidak
+        # punya admin sama sekali dan tidak ada yang bisa mengelola akun lagi.
+        if row['role'] == 'admin' and role != 'admin' and _admin_count() <= 1:
+            return jsonify({'error': 'Tidak bisa menurunkan admin terakhir'}), 400
+        fields.append("role=?")
+        params.append(role)
+    if d.get('password'):
+        if len(d['password']) < 6:
+            return jsonify({'error': 'Password minimal 6 karakter'}), 400
+        fields.append("password_hash=?")
+        params.append(generate_password_hash(d['password']))
+        fields.append("must_change_password=1")
+    if not fields:
+        return jsonify({'error': 'Tidak ada perubahan'}), 400
+    params.append(uid)
+    db_execute(f"UPDATE users SET {', '.join(fields)} WHERE id=?", tuple(params))
+    return jsonify({'ok': True})
+
+@app.route('/api/users/<int:uid>', methods=['DELETE'])
+@admin_required
+@demo_readonly
+def api_users_delete(uid):
+    row = db_execute("SELECT id, role FROM users WHERE id=?", (uid,), fetchone=True)
+    if not row:
+        return jsonify({'error': 'Akun tidak ditemukan'}), 404
+    if uid == session.get('user_id'):
+        return jsonify({'error': 'Tidak bisa menghapus akun sendiri'}), 400
+    if row['role'] == 'admin' and _admin_count() <= 1:
+        return jsonify({'error': 'Tidak bisa menghapus admin terakhir'}), 400
+    db_execute("DELETE FROM users WHERE id=?", (uid,))
     return jsonify({'ok': True})
 
 # Camera CRUD
@@ -1490,18 +1632,20 @@ def api_cameras_list():
     return jsonify(rows)
 
 @app.route('/api/cameras/<int:cid>', methods=['GET'])
-@login_required
+@admin_required
 def api_cameras_get(cid):
-    """Detail 1 kamera dengan URL lengkap (termasuk kredensial) — dipakai
-    form edit di frontend, berbeda dari GET /api/cameras (list) yang
-    menyamarkan kredensial."""
+    """Detail 1 kamera dengan URL lengkap (TERMASUK kredensial RTSP/DVRIP
+    plaintext) — dipakai form edit di frontend. admin_required (bukan cuma
+    login_required) supaya akun role 'user' tidak bisa baca kredensial kamera
+    biarpun tahu endpoint-nya; GET /api/cameras (list) tetap boleh semua role
+    karena sudah menyamarkan kredensial lewat _mask_url()."""
     row = db_execute("SELECT * FROM cameras WHERE id=?", (cid,), fetchone=True)
     if not row:
         return jsonify({'error': 'Kamera tidak ditemukan'}), 404
     return jsonify(row)
 
 @app.route('/api/cameras', methods=['POST'])
-@login_required
+@admin_required
 @demo_readonly
 def api_cameras_create():
     d = request.json
@@ -1513,7 +1657,7 @@ def api_cameras_create():
     return jsonify({'id': cid}), 201
 
 @app.route('/api/cameras/<int:cid>', methods=['PUT'])
-@login_required
+@admin_required
 @demo_readonly
 def api_cameras_update(cid):
     d = request.json
@@ -1525,7 +1669,7 @@ def api_cameras_update(cid):
     return jsonify({'ok': True})
 
 @app.route('/api/cameras/<int:cid>', methods=['DELETE'])
-@login_required
+@admin_required
 @demo_readonly
 def api_cameras_delete(cid):
     stop_camera(cid)
@@ -1572,7 +1716,7 @@ def api_videos_list():
 
 
 @app.route('/api/videos/upload', methods=['POST'])
-@login_required
+@admin_required
 @demo_readonly
 def api_videos_upload():
     """Upload satu file video. Response berisi path absolute yang bisa dipakai sebagai URL kamera."""
@@ -1604,7 +1748,7 @@ def api_videos_upload():
 
 
 @app.route('/api/videos/<path:filename>', methods=['DELETE'])
-@login_required
+@admin_required
 @demo_readonly
 def api_videos_delete(filename):
     """Hapus file video upload."""
@@ -1676,7 +1820,7 @@ def api_settings_get():
     return jsonify(settings)
 
 @app.route('/api/settings', methods=['PUT'])
-@login_required
+@admin_required
 @demo_readonly
 def api_settings_update():
     d = request.json
