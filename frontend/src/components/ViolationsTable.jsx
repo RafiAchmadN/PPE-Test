@@ -1,4 +1,4 @@
-import { evidenceUrl } from '../lib/api';
+import { thumbUrl } from '../lib/api';
 import { TYPE_LABELS, TYPE_BADGE, resolveType } from '../lib/violationTypes';
 
 export default function ViolationsTable({ rows, onShowEvidence, emptyText }) {
@@ -33,7 +33,7 @@ export default function ViolationsTable({ rows, onShowEvidence, emptyText }) {
                   {hasFile ? (
                     <button type="button" className="flex items-center gap-2.5 text-left" onClick={() => onShowEvidence(l.Bukti)}>
                       <img
-                        src={evidenceUrl(l.Bukti)}
+                        src={thumbUrl(l.Bukti)}
                         alt="bukti"
                         loading="lazy"
                         className="w-[48px] h-[34px] object-cover rounded border border-base-300 bg-base-200 flex-shrink-0"

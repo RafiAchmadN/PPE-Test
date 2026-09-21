@@ -52,13 +52,16 @@ BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 DATABASE_PATH = os.path.join(BASE_DIR, 'logging.db')
 OUTPUT_FOLDER  = os.path.join(BASE_DIR, 'data', 'violations')
 ARCHIVE_FOLDER = os.path.join(OUTPUT_FOLDER, 'archive')  # ZIP harian, lihat _archive_worker()
+THUMB_FOLDER   = os.path.join(OUTPUT_FOLDER, 'thumbs')  # cache thumbnail, lihat serve_foto_thumb()
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'data', 'videos')
 BACKUP_FOLDER = os.path.join(BASE_DIR, 'backups')
 INFERENCE_SIZE       = (640, 480)
+THUMB_WIDTH          = 160  # cukup buat thumbnail tabel (48px) + retina 2-3x
 ALLOWED_VIDEO_EXTS   = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v'}
 LOG_FOLDER = os.path.join(BASE_DIR, 'data', 'logs')
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 os.makedirs(ARCHIVE_FOLDER, exist_ok=True)
+os.makedirs(THUMB_FOLDER, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(BACKUP_FOLDER, exist_ok=True)
 os.makedirs(LOG_FOLDER, exist_ok=True)
@@ -245,6 +248,28 @@ def _mask_url(url):
 def _archive_zip_path(tanggal):
     return os.path.join(ARCHIVE_FOLDER, f'violations_{tanggal}.zip')
 
+# Buka ZipFile itu MAHAL kalau arsipnya berisi banyak entry (parse central
+# directory penuh tiap kali) — sebelum ada cache ini, tiap request foto/log
+# yang menyentuh arsip lama membuka ulang dari nol. Di-keyed sama mtime file
+# supaya otomatis re-open kalau _archive_worker menambah entry baru (append).
+_zip_cache = {}
+_zip_cache_lock = threading.Lock()
+
+def _get_cached_zip(zpath):
+    mtime = os.path.getmtime(zpath)
+    with _zip_cache_lock:
+        cached = _zip_cache.get(zpath)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        if cached:
+            try:
+                cached[1].close()
+            except Exception:
+                pass
+        zf = zipfile.ZipFile(zpath)
+        _zip_cache[zpath] = (mtime, zf)
+        return zf
+
 def _evidence_in_archive(bukti, tanggal):
     """True kalau file bukti sudah diarsipkan ke ZIP harian (lihat _archive_worker)."""
     if not bukti or not tanggal:
@@ -253,10 +278,34 @@ def _evidence_in_archive(bukti, tanggal):
     if not os.path.isfile(zpath):
         return False
     try:
-        with zipfile.ZipFile(zpath) as zf:
-            return bukti in zf.namelist()
+        return bukti in _get_cached_zip(zpath).namelist()
     except Exception:
         return False
+
+def _read_evidence_bytes(filename):
+    """Baca isi foto bukti dari file lepas ATAU dari ZIP arsip harian (dengan
+    cache, lihat _get_cached_zip). None kalau memang tidak ketemu di manapun.
+    Dipakai serve_foto_thumb() -- perlu byte mentahnya buat di-resize cv2,
+    beda dari serve_foto() yang langsung stream file lepas via send_from_directory."""
+    fpath = os.path.join(OUTPUT_FOLDER, filename)
+    real_base = os.path.realpath(OUTPUT_FOLDER)
+    real_target = os.path.realpath(fpath)
+    try:
+        in_bounds = os.path.commonpath([real_base, real_target]) == real_base
+    except ValueError:
+        in_bounds = False
+    if in_bounds and os.path.isfile(fpath):
+        with open(fpath, 'rb') as f:
+            return f.read()
+    row = db_execute("SELECT Tanggal FROM data WHERE Bukti=?", (filename,), fetchone=True)
+    if row:
+        zpath = _archive_zip_path(row['Tanggal'])
+        if os.path.isfile(zpath):
+            try:
+                return _get_cached_zip(zpath).read(filename)
+            except KeyError:
+                pass
+    return None
 
 def _archive_worker():
     """Arsipkan foto bukti pelanggaran hari-hari sebelumnya jadi satu ZIP per
@@ -1500,11 +1549,50 @@ def serve_foto(filename):
         zpath = _archive_zip_path(row['Tanggal'])
         if os.path.isfile(zpath):
             try:
-                with zipfile.ZipFile(zpath) as zf:
-                    return Response(zf.read(filename), mimetype='image/jpeg')
+                return Response(_get_cached_zip(zpath).read(filename), mimetype='image/jpeg')
             except KeyError:
                 pass
     return jsonify({'error': 'File tidak ditemukan'}), 404
+
+@app.route('/foto/thumb/<path:filename>')
+@login_required
+def serve_foto_thumb(filename):
+    """Thumbnail kecil (lebar THUMB_WIDTH) buat tabel Dashboard/Logs, yang
+    nampilin banyak foto sekaligus di ukuran 48x34px -- sebelum ada endpoint
+    ini, browser download JPEG ASLI (400-500KB, resolusi kamera) cuma buat
+    ditampilkan sekecil itu, dan kalau fotonya sudah diarsipkan ke ZIP harian
+    yang isinya banyak entry, itu jadi puluhan detik per foto. Di-cache ke
+    disk (THUMB_FOLDER) supaya cuma di-generate sekali per foto, request
+    berikutnya tinggal serve file kecil yang sudah ada."""
+    safe_name = os.path.basename(filename)  # cegah path traversal ke cache file
+    thumb_path = os.path.join(THUMB_FOLDER, safe_name)
+    if os.path.isfile(thumb_path):
+        return send_from_directory(THUMB_FOLDER, safe_name)
+
+    data = _read_evidence_bytes(filename)
+    if data is None:
+        return jsonify({'error': 'File tidak ditemukan'}), 404
+    try:
+        arr = np.frombuffer(data, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError('imdecode gagal (file bukan JPEG valid?)')
+        h, w = img.shape[:2]
+        if w > THUMB_WIDTH:
+            img = cv2.resize(img, (THUMB_WIDTH, max(1, int(h * THUMB_WIDTH / w))))
+        ok, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        if not ok:
+            raise ValueError('imencode gagal')
+        thumb_bytes = buf.tobytes()
+        try:
+            with open(thumb_path, 'wb') as f:
+                f.write(thumb_bytes)
+        except OSError as e:
+            print(f"[THUMB] Gagal tulis cache {safe_name}: {e}")
+    except Exception as e:
+        print(f"[THUMB] Gagal generate thumbnail {filename}: {e}")
+        return Response(data, mimetype='image/jpeg')  # fallback: kirim aslinya
+    return Response(thumb_bytes, mimetype='image/jpeg')
 
 @app.route('/api/info')
 @login_required

@@ -106,6 +106,10 @@ export const getLogs = (params = {}) => {
 };
 export const getStats = () => get('/api/stats');
 export const evidenceUrl = (filename) => `${API_BASE}/foto/${filename}`;
+// Thumbnail kecil (di-cache & di-resize server-side) -- dipakai tabel yang
+// nampilin banyak foto sekaligus, supaya browser tidak download JPEG asli
+// (bisa ratusan KB per foto) cuma buat ditampilkan sekecil 48x34px.
+export const thumbUrl = (filename) => `${API_BASE}/foto/thumb/${filename}`;
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 export const getSettings = () => get('/api/settings');
