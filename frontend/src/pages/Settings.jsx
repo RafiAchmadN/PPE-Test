@@ -110,7 +110,7 @@ export default function Settings() {
             onChange={(e) => updateField('person_confidence', e.target.value)}
           />
         </SettingRow>
-        <SettingRow label="Stream FPS Cap" desc="Max frames per second for MJPEG streams">
+        <SettingRow label="Stream FPS (base)" desc="Target fps saat 4 kamera aktif bersamaan — otomatis naik jika kamera aktif sedikit, turun jika banyak (2-15 fps)">
           <input
             type="number"
             min="1"

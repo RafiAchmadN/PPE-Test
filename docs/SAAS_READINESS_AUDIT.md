@@ -5,8 +5,9 @@
 > Bukan multi-tenant cloud SaaS — dokumen ini TIDAK membahas isolasi data
 > lintas-tenant, billing, atau provisioning otomatis multi-pelanggan.
 >
-> Status: dokumen audit — **belum ada perubahan kode**. Prioritas P0/P1/P2 di
-> bagian akhir perlu dikonfirmasi sebelum implementasi dimulai.
+> Status: dokumen audit. Prioritas P0/P1/P2 di bagian akhir perlu dikonfirmasi
+> sebelum implementasi dimulai — I2/I6 (healthcheck + monitoring/alerting)
+> sudah diimplementasikan, sisanya masih sesuai temuan audit awal.
 
 ---
 
@@ -78,11 +79,11 @@ appliance single-tenant yang dipilih.
 | # | Temuan | Rekomendasi |
 |---|--------|-------------|
 | I1 | `docker-compose.prod.yml` mensyaratkan `networks.web: external: true` tapi tidak ada langkah `docker network create web` di README maupun di compose file | `docker compose up` di mesin baru **akan gagal** sampai user tahu harus buat network manual dulu. Ganti jadi network internal biasa (tanpa `external: true`) kecuali memang sengaja mau digabung reverse proxy eksternal — kalau begitu, dokumentasikan step-nya |
-| I2 | Tidak ada `healthcheck:` di service manapun | Docker/orchestrator tidak tahu kalau backend "hidup tapi macet" (mis. inference worker deadlock); tambahkan healthcheck ke `/api/auth/status` atau endpoint `/healthz` baru yang tidak butuh login |
+| I2 | ~~Tidak ada `healthcheck:` di service manapun~~ **SELESAI** — `GET /healthz` (no-auth) di `app_web.py` + `healthcheck:` di `docker-compose.prod.yml` (service `ppe-backend`) | — |
 | I3 | Tidak ada resource limit (`mem_limit`/`deploy.resources.limits`) selain reservasi GPU | Proses yang leak memory (kamera banyak + inference lama) bisa menghabiskan RAM host tanpa batas | 
 | I4 | Backend & frontend expose port langsung ke host tanpa reverse proxy TLS-terminating | Tambahkan Caddy/Nginx/Traefik sebagai satu-satunya entrypoint HTTPS (bisa pakai cert self-signed/internal CA untuk LAN, atau Let's Encrypt kalau expose ke internet) — backend tidak perlu publish port ke host sama sekali |
-| I5 | Logging hanya `print()` ke stdout, tanpa rotasi/level/format terstruktur | Pindah ke modul `logging` Python dengan `RotatingFileHandler` atau biarkan stdout tapi dokumentasikan `docker logs --tail` + `logging` driver rotation di Docker daemon config, supaya disk tidak penuh oleh log |
-| I6 | Tidak ada monitoring/alerting — status kamera online/offline sudah ada di API tapi tidak ada notifikasi proaktif | Tambahkan pengecekan berkala + notifikasi (email/webhook/Telegram) saat: kamera offline > N menit, disk > 80% terpakai, proses inference crash |
+| I5 | Logging hanya `print()` ke stdout, tanpa rotasi/level/format terstruktur | **SEBAGIAN** — jalur insiden (health check, alert) sekarang lewat `logging` + `RotatingFileHandler` ke `data/logs/incidents.log` (JSON per baris, lihat `log_incident()`). `print()` di jalur operasional biasa (koneksi kamera, dsb.) SENGAJA belum diganti — refactor ~100 titik print() berisiko regresi tanpa manfaat langsung ke alerting; masih tertangkap `docker logs` |
+| I6 | ~~Tidak ada monitoring/alerting~~ **SELESAI** — `_health_monitor_worker()` di `app_web.py` cek berkala (kamera offline > 5 menit, disk > 80%, inference worker macet, antrian DB writer menumpuk) → `data/logs/incidents.log`; service `ppe-monitor` (`monitor/`) baca file itu + poll `/healthz` dari proses terpisah, kirim ke Telegram kalau `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` diisi (opsional, default cuma catat lokal) |
 | I7 | Tidak ada CI (lint/test/build check) sebelum kode dikirim ke pelanggan | Minimal: GitHub Actions untuk `pip install` + `python -c "import app_web"` sanity check, `npm run build` frontend, dan (setelah ada) `pip-audit`/`npm audit` |
 | I8 | GPU pinned ke CUDA 12.8/Blackwell (RTX 5060) di `Dockerfile` — belum tervalidasi di GPU lain atau CPU-only di beban produksi | Bagian dari rencana uji kompatibilitas (§5) sebelum deploy ke "PC yang lebih kuat" yang spec-nya mungkin beda |
 | I9 | Tidak ada strategi update/rollback terdokumentasi untuk instance yang sudah live di pelanggan (README hanya `git pull` + rebuild) | Dokumentasikan prosedur: backup dulu → pull → build → migrate DB (jika ada) → up, plus cara rollback ke image sebelumnya kalau update bermasalah |
@@ -332,8 +333,10 @@ lokal pelanggan.
 - [ ] Retensi 3 tingkat (hot/warm/archive) — retensi berbasis waktu 1-tingkat
       sudah aktif (§7.2–§7.5), promosi warm/archive + alert kapasitas disk +
       VACUUM terjadwal masih belum
-- [ ] Monitoring/alerting dasar: kamera offline lama, disk penuh, proses crash
-      (I6)
+- [x] Monitoring/alerting dasar: kamera offline lama, disk penuh, proses crash
+      (I6) — `/healthz` + `_health_monitor_worker` + service `ppe-monitor`.
+      Yang masih manual: isi `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` di deploy
+      pelanggan supaya alert benar-benar terkirim (default cuma catat lokal)
 - [ ] Capacity test terdokumentasi (§5.4) sebagai dasar klaim kapasitas resmi
       ke pelanggan
 - [ ] CI dasar: build check + lint (I7)

@@ -1,14 +1,20 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Sidebar from './components/Sidebar';
 import Topbar from './components/Topbar';
-import Login from './pages/Login';
-import ForcePasswordChange from './pages/ForcePasswordChange';
-import Dashboard from './pages/Dashboard';
-import LiveCameras from './pages/LiveCameras';
-import CameraManagement from './pages/CameraManagement';
-import Logs from './pages/Logs';
-import Settings from './pages/Settings';
+
+// Code-split per halaman — sebelumnya semua page (termasuk chart/table di
+// Dashboard & Logs) di-bundle jadi satu file JS yang harus diunduh penuh
+// sebelum layar login pun sempat tampil. Tiap import() di bawah jadi chunk
+// terpisah yang baru diambil browser saat route-nya benar-benar dikunjungi.
+const Login = lazy(() => import('./pages/Login'));
+const ForcePasswordChange = lazy(() => import('./pages/ForcePasswordChange'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const LiveCameras = lazy(() => import('./pages/LiveCameras'));
+const CameraManagement = lazy(() => import('./pages/CameraManagement'));
+const Logs = lazy(() => import('./pages/Logs'));
+const Settings = lazy(() => import('./pages/Settings'));
 
 function FullScreenSpinner() {
   return (
@@ -47,24 +53,26 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <Routes>
-          <Route
-            path="/login"
-            element={
-              <PublicOnlyRoute>
-                <Login />
-              </PublicOnlyRoute>
-            }
-          />
-          <Route path="/" element={<ProtectedLayout />}>
-            <Route index element={<Dashboard />} />
-            <Route path="cameras" element={<LiveCameras />} />
-            <Route path="manage" element={<CameraManagement />} />
-            <Route path="logs" element={<Logs />} />
-            <Route path="settings" element={<Settings />} />
-          </Route>
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <Suspense fallback={<FullScreenSpinner />}>
+          <Routes>
+            <Route
+              path="/login"
+              element={
+                <PublicOnlyRoute>
+                  <Login />
+                </PublicOnlyRoute>
+              }
+            />
+            <Route path="/" element={<ProtectedLayout />}>
+              <Route index element={<Dashboard />} />
+              <Route path="cameras" element={<LiveCameras />} />
+              <Route path="manage" element={<CameraManagement />} />
+              <Route path="logs" element={<Logs />} />
+              <Route path="settings" element={<Settings />} />
+            </Route>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </AuthProvider>
     </BrowserRouter>
   );

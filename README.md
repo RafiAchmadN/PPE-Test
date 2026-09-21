@@ -250,6 +250,23 @@ environment:
   # - MAX_UPLOAD_MB=500
 ```
 
+**Monitoring** (`docker-compose.prod.yml` → service `ppe-monitor`, opsional):
+```yaml
+environment:
+  - HEALTHZ_URL=http://ppe-backend:5000/healthz
+  - CHECK_INTERVAL_SEC=60
+  # - TELEGRAM_BOT_TOKEN=isi-token-bot-dari-BotFather
+  # - TELEGRAM_CHAT_ID=isi-chat-id-tujuan-alert
+```
+> `ppe-backend` mengekspos `GET /healthz` (tanpa login) yang melaporkan status model,
+> kamera offline, disk penuh, dan inference worker yang macet — dipakai Docker
+> `healthcheck:` dan di-poll oleh `ppe-monitor`. Kejadian bermasalah juga dicatat
+> terstruktur (JSON per baris) ke `data/logs/incidents.log`; `ppe-monitor` membaca
+> file itu plus `/healthz` dari proses terpisah (supaya tetap bisa lapor kalau
+> `ppe-backend` benar-benar down, bukan cuma macet) dan kirim ke Telegram kalau
+> dua env var di atas diisi — tanpa itu, tetap tercatat ke `data/logs/monitor.log`
+> dan `docker logs ppe-monitor`.
+
 **Frontend** (`frontend/.env` atau build arg `VITE_API_URL` di `docker-compose.prod.yml`):
 ```env
 VITE_API_URL=https://localhost:5443   # Base URL backend (lewat proxy) yang bisa diakses browser
@@ -271,7 +288,7 @@ volumes:
 | Confidence (PPE) | 0.50 | Threshold deteksi kelas APD |
 | Person Confidence | 0.70 | Threshold deteksi kelas Person |
 | Violation Delay | 1 detik | Interval minimum logging per kamera |
-| Stream FPS | 5 | Frame rate MJPEG stream ke browser |
+| Stream FPS (base) | 5 | Target fps saat 4 kamera aktif bersamaan — otomatis turun kalau kamera aktif makin banyak, naik kalau sedikit (rentang 2-15 fps, lihat `_effective_stream_fps` di `app_web.py`) |
 | Inference | Enabled | Toggle on/off inferensi YOLOv11 |
 
 ---
@@ -428,7 +445,7 @@ PPE-Test/
 ├── app_web.py              # Backend Flask — JSON API murni (CORS + session)
 ├── best.pt                 # Bobot model YOLOv11m terlatih
 ├── Dockerfile               # Docker image backend (CUDA 12.8 + PyTorch cu128)
-├── docker-compose.prod.yml  # Docker Compose — service ppe-backend + ppe-frontend + ppe-proxy
+├── docker-compose.prod.yml  # Docker Compose — service ppe-backend + ppe-frontend + ppe-proxy + ppe-monitor
 ├── requirements.txt        # Python dependencies
 ├── exportdb.py             # Utilitas ekspor database ke Excel/CSV
 ├── logging.db              # Database SQLite (auto-generated)
@@ -438,6 +455,9 @@ PPE-Test/
 │   ├── Dockerfile
 │   ├── nginx.conf
 │   └── certs/               # cert.pem + key.pem (generate via scripts/, tidak di-commit)
+├── monitor/                 # Watchdog eksternal — poll /healthz + tail incidents.log, alert Telegram
+│   ├── Dockerfile            # Image minimal (python:3.11-alpine, cuma stdlib)
+│   └── monitor.py
 ├── scripts/
 │   └── generate-self-signed-cert.sh   # Bikin sertifikat TLS untuk testing/LAN
 ├── docs/
@@ -456,7 +476,8 @@ PPE-Test/
 │       └── pages/           # Dashboard, LiveCameras, CameraManagement, Logs, Settings, ForcePasswordChange
 ├── data/
 │   ├── violations/         # Snapshot JPEG pelanggaran
-│   └── videos/             # File video untuk testing
+│   ├── videos/             # File video untuk testing
+│   └── logs/               # incidents.log (app_web.py), monitor.log + state (ppe-monitor)
 ├── workflow/               # Script pelatihan model
 │   ├── step1_extract_frames.py
 │   ├── step2_auto_annotate.py

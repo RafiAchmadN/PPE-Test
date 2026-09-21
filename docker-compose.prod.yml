@@ -17,6 +17,16 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       # - DEMO_MODE=1                  # aktifkan HANYA di instance demo publik terpisah (lihat docs/SAAS_READINESS_AUDIT.md §8)
       # - SECRET_KEY=ganti-dengan-random-string-panjang   (opsional — default sudah auto-generate & persist di DB)
+    # /healthz tidak butuh login (lihat app_web.py) — dipakai Docker di sini,
+    # dan juga di-poll dari luar container oleh service ppe-monitor di bawah.
+    # start_period 90s: load model YOLO ke GPU butuh waktu saat cold start,
+    # jangan sampai dianggap unhealthy padahal masih proses awal.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5000/healthz', timeout=5).status < 500 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
     # Tidak publish port ke host — dijangkau langsung oleh nginx-gateway lewat
     # network "web" (nama container = DNS name), TLS-nya sudah ditangani gateway.
     deploy:
@@ -45,6 +55,33 @@ services:
       - ppe-backend
     # Tidak publish port ke host — dijangkau langsung oleh nginx-gateway lewat
     # network "web" (nama container = DNS name), TLS-nya sudah ditangani gateway.
+    networks:
+      - web
+
+  # Watchdog eksternal (lihat monitor/monitor.py & docs/SAAS_READINESS_AUDIT.md
+  # §I6) — proses TERPISAH dari ppe-backend supaya tetap bisa lapor kalau
+  # ppe-backend benar-benar crash/mati total (bukan cuma "macet tapi hidup",
+  # itu sudah tercover /healthz). Tanpa TELEGRAM_BOT_TOKEN/CHAT_ID, tetap
+  # jalan dan cukup catat ke ./data/logs/monitor.log + `docker logs ppe-monitor`
+  # — isi dua env di bawah kapan pun siap supaya alert juga masuk Telegram.
+  ppe-monitor:
+    build:
+      context: ./monitor
+      dockerfile: Dockerfile
+    container_name: ppe-monitor
+    restart: unless-stopped
+    depends_on:
+      - ppe-backend
+    environment:
+      - HEALTHZ_URL=http://ppe-backend:5000/healthz
+      - CHECK_INTERVAL_SEC=60
+      # - TELEGRAM_BOT_TOKEN=isi-token-bot-dari-BotFather
+      # - TELEGRAM_CHAT_ID=isi-chat-id-tujuan-alert
+    volumes:
+      # Cuma folder log yang dibutuhkan (bukan seluruh ./data yang juga berisi
+      # foto pelanggaran/video) — baca incidents.log punya ppe-backend, tulis
+      # monitor.log & state-nya sendiri di folder yang sama.
+      - ./data/logs:/app/data/logs
     networks:
       - web
 

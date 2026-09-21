@@ -12,11 +12,14 @@ import json
 import time
 import queue
 import socket
+import shutil
 import sqlite3
 import secrets
+import logging
 import threading
 import traceback
 import zipfile
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, date
 from functools import wraps
 from urllib.parse import urlparse
@@ -43,6 +46,7 @@ except ImportError:
 DVRIP_AVAILABLE = _DVRIP_LIB_OK and _AV_LIB_OK
 
 # --- CONFIG ---
+APP_START_TIME = time.time()
 BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 DATABASE_PATH = os.path.join(BASE_DIR, 'logging.db')
 OUTPUT_FOLDER  = os.path.join(BASE_DIR, 'data', 'violations')
@@ -51,10 +55,40 @@ UPLOAD_FOLDER = os.path.join(BASE_DIR, 'data', 'videos')
 BACKUP_FOLDER = os.path.join(BASE_DIR, 'backups')
 INFERENCE_SIZE       = (640, 480)
 ALLOWED_VIDEO_EXTS   = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v'}
+LOG_FOLDER = os.path.join(BASE_DIR, 'data', 'logs')
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 os.makedirs(ARCHIVE_FOLDER, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(BACKUP_FOLDER, exist_ok=True)
+os.makedirs(LOG_FOLDER, exist_ok=True)
+
+# Log kejadian terstruktur (JSON per baris) — terpisah dari print() biasa yang
+# cuma kebaca lewat `docker logs`. File ini yang dibaca _health_monitor_worker
+# untuk kirim alert, dan yang jadi rujukan kalau perlu telusuri "kapan/kenapa"
+# suatu masalah terjadi setelah kejadiannya lewat. Rotasi otomatis (5x2MB)
+# supaya tidak pernah numpuk tak terbatas seperti insiden foto pelanggaran dulu.
+incident_logger = logging.getLogger('mapper.incidents')
+incident_logger.setLevel(logging.INFO)
+_incident_handler = RotatingFileHandler(
+    os.path.join(LOG_FOLDER, 'incidents.log'), maxBytes=2_000_000, backupCount=5, encoding='utf-8'
+)
+_incident_handler.setFormatter(logging.Formatter('%(message)s'))
+incident_logger.addHandler(_incident_handler)
+incident_logger.propagate = False
+
+def log_incident(severity, code, message, **details):
+    """Catat satu insiden (dipanggil dari _health_monitor_worker, atau titik
+    manapun yang perlu dilacak nanti). severity: 'warning' | 'critical'."""
+    entry = {
+        'ts': datetime.now().isoformat(timespec='seconds'),
+        'severity': severity,
+        'code': code,
+        'message': message,
+    }
+    if details:
+        entry['details'] = details
+    incident_logger.info(json.dumps(entry, ensure_ascii=False))
+    print(f"[INCIDENT:{severity.upper()}] {code}: {message}")
 
 # Mode demo/preview publik (lihat docs/SAAS_READINESS_AUDIT.md §8): auto-login
 # semua pengunjung sebagai guest, nonaktifkan endpoint yang mengubah state
@@ -429,6 +463,13 @@ _device = 'cpu'          # akan diupdate saat model load
 # maxsize=40 → jika worker kewalahan, frame lama di-drop (tidak menumpuk di RAM)
 _infer_queue = queue.Queue(maxsize=40)
 
+# "Detak jantung" inference worker — diupdate tiap kali loop utamanya mulai
+# iterasi baru. Kalau nilainya berhenti bertambah tua (stale) padahal ada
+# kamera yang butuh dideteksi, artinya thread itu macet/hang di tengah
+# model.predict() (CUDA hang tanpa exception, bukan crash biasa yang sudah
+# ketangkep try/except di bawah) — lihat _health_monitor_worker.
+_last_inference_ts = time.time()
+
 # Kamera yang sedang tertampil di grid Live Cameras pada frontend (4 kamera per
 # halaman). Selama _visible_restricted=True, YOLO inference hanya dijalankan
 # untuk kamera yang ada di _visible_cam_ids, supaya beban GPU/CPU tidak naik
@@ -610,10 +651,12 @@ def _inference_worker():
     (N frame) hampir secepat memproses 1 frame secara sendiri-sendiri.
     Tambah worker ke-2 (NUM_WORKERS=2) jika kamera > 20.
     """
+    global _last_inference_ts
     BATCH_SIZE = 8     # jumlah frame per batch — sesuaikan dengan VRAM GPU
     BATCH_WAIT  = 0.04  # tunggu max 40ms untuk kumpulkan frame sebelum proses
 
     while True:
+        _last_inference_ts = time.time()
         batch = []   # list of (CameraStream_instance, frame_ndarray)
         deadline = time.time() + BATCH_WAIT
 
@@ -739,7 +782,10 @@ class CameraStream:
         self.cam_id = cam_id
         self.url = url
         self.name = name
-        self.frame = None
+        self._frame = None
+        self._frame_version = 0
+        self._jpeg_cache = None
+        self._jpeg_cache_version = -1
         self.lock = threading.Lock()
         self.active = False
         self.thread = None
@@ -747,6 +793,20 @@ class CameraStream:
         self.fps = 0
         self.connected = False
         self.error_msg = ""
+
+    @property
+    def frame(self):
+        return self._frame
+
+    @frame.setter
+    def frame(self, value):
+        # Semua caller sudah pegang self.lock saat assign cs.frame (lihat
+        # _inference_worker, _loop, _loop_dvrip) — setter ini sengaja TIDAK
+        # lock ulang (Lock non-reentrant, bakal deadlock). Versi dipakai
+        # get_jpeg() supaya banyak viewer nonton kamera yang sama tidak
+        # masing-masing re-encode JPEG dari frame identik.
+        self._frame = value
+        self._frame_version += 1
 
     def start(self):
         if self.active: return
@@ -982,7 +1042,7 @@ class CameraStream:
                 if _is_camera_visible(self.cam_id):
                     self._push_frame(frame)
 
-            time.sleep(1.0 / max(settings['stream_fps'] * 2, 1))
+            time.sleep(1.0 / max(_effective_stream_fps() * 2, 1))
 
         if cap: cap.release()
 
@@ -1128,20 +1188,180 @@ class CameraStream:
 
     def get_jpeg(self):
         with self.lock:
-            if self.frame is not None:
-                frame = self.frame
-                h, w = frame.shape[:2]
-                if w > 640:
-                    frame = cv2.resize(frame, (640, int(h * 640 / w)))
-                _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
-                return buf.tobytes()
-        return None
+            if self._frame is None:
+                return None
+            # Frame belum berganti sejak encode terakhir (umum saat >1 viewer
+            # nonton kamera yang sama, atau stream_fps polling lebih cepat
+            # daripada update frame) -> pakai hasil encode yang sudah ada,
+            # jangan resize+imencode ulang dari data identik.
+            if self._jpeg_cache is not None and self._jpeg_cache_version == self._frame_version:
+                return self._jpeg_cache
+            frame = self._frame
+            h, w = frame.shape[:2]
+            if w > 640:
+                frame = cv2.resize(frame, (640, int(h * 640 / w)))
+            _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+            jpeg = buf.tobytes()
+            self._jpeg_cache = jpeg
+            self._jpeg_cache_version = self._frame_version
+            return jpeg
 
     def get_info(self):
         return {'connected': self.connected, 'fps': round(self.fps, 1), 'error': self.error_msg}
 
 
 camera_streams = {}
+
+# ─── FPS ADAPTIF ─────────────────────────────────────────────────────────────
+# settings['stream_fps'] dulu dipukul rata ke SEMUA kamera — dengan 1 kamera
+# sama beratnya (secara CPU decode + JPEG encode + bandwidth) dengan 12 kamera,
+# padahal beban total naik linear seiring jumlah kamera. Di sini fps per kamera
+# diturunkan otomatis kalau kamera aktif makin banyak, dan dinaikkan kalau
+# sedikit — bukan angka statis.
+#
+# REFERENCE_CAMERAS = titik acuan di mana fps = settings['stream_fps'] persis
+# (disamakan dengan ukuran grid Live Cameras: 4 kamera/halaman, lihat
+# _is_camera_visible). Total "jatah frame/detik" = stream_fps * REFERENCE
+# dibagi rata ke semua kamera yang sedang jalan, dijepit ke [MIN, MAX] supaya
+# tidak pernah jadi 0 fps (macet total) ataupun meledak tak terbatas saat
+# cuma 1 kamera yang aktif.
+STREAM_FPS_REFERENCE_CAMERAS = 4
+STREAM_FPS_MIN = 2
+STREAM_FPS_MAX = 15
+
+def _raw_active_camera_count():
+    # Snapshot .values() ke list supaya tidak crash kalau dict berubah
+    # (kamera ditambah/dihapus admin) di tengah iterasi dari thread lain.
+    # Angka SEBENARNYA (boleh 0) — dipakai di health check, jangan dipakai
+    # untuk pembagian (lihat _active_camera_count).
+    return sum(1 for cs in list(camera_streams.values()) if cs.active)
+
+def _active_camera_count():
+    # >=1 selalu — cuma dipakai sebagai pembagi FPS, 0 kamera akan bikin
+    # ZeroDivisionError kalau dipakai apa adanya.
+    return max(_raw_active_camera_count(), 1)
+
+def _effective_stream_fps():
+    """FPS per kamera saat ini, sudah disesuaikan jumlah kamera aktif."""
+    budget = settings['stream_fps'] * STREAM_FPS_REFERENCE_CAMERAS
+    fps = budget / _active_camera_count()
+    return max(STREAM_FPS_MIN, min(STREAM_FPS_MAX, fps))
+
+
+# ─── HEALTH & MONITORING (docs/SAAS_READINESS_AUDIT.md §I2/§I6) ─────────────
+# Ambang batas alert — semua dalam detik/persen, gampang di-tuning tanpa
+# nyentuh logika di bawah.
+CAMERA_OFFLINE_ALERT_SEC   = 5 * 60   # kamera disconnect terus-menerus > 5 menit
+INFERENCE_STALE_ALERT_SEC  = 60       # heartbeat inference worker tidak update > 60s
+DISK_ALERT_PERCENT         = 80       # disk terpakai > 80%
+VIOLATION_QUEUE_ALERT_SIZE = 200      # antrian tulis DB menumpuk (writer thread macet?)
+HEALTH_CHECK_INTERVAL_SEC  = 30
+INCIDENT_REPEAT_ALERT_SEC  = 15 * 60  # jangan spam alert yang sama tiap 30s, ulang tiap 15 menit
+
+_cam_offline_since = {}   # cam_id -> timestamp pertama kali terdeteksi offline
+_incident_last_sent = {}  # code -> timestamp terakhir kali alert code ini dikirim
+
+def _should_alert(code):
+    """True kalau code ini belum pernah dilaporkan, atau sudah lama sejak
+    laporan terakhir (hindari banjir alert yang sama tiap 30 detik)."""
+    now = time.time()
+    last = _incident_last_sent.get(code)
+    if last is None or (now - last) >= INCIDENT_REPEAT_ALERT_SEC:
+        _incident_last_sent[code] = now
+        return True
+    return False
+
+def _clear_alert(code):
+    _incident_last_sent.pop(code, None)
+
+def get_health_snapshot():
+    """Kumpulan status live — dipakai /healthz DAN _health_monitor_worker,
+    supaya logika 'apa itu sehat' cuma didefinisikan sekali di sini."""
+    problems = []
+
+    model_ok = _model is not None
+    if not model_ok:
+        problems.append({'code': 'model_not_loaded', 'severity': 'critical',
+                          'message': 'Model YOLO belum/gagal dimuat'})
+
+    infer_age = time.time() - _last_inference_ts
+    any_camera_needs_inference = settings['inference_enabled'] and _raw_active_camera_count() >= 1
+    if any_camera_needs_inference and infer_age > INFERENCE_STALE_ALERT_SEC:
+        problems.append({'code': 'inference_stale', 'severity': 'critical',
+                          'message': f'Inference worker tidak merespons {infer_age:.0f}s',
+                          'age_sec': round(infer_age, 1)})
+
+    try:
+        disk = shutil.disk_usage(BASE_DIR)
+        disk_pct = round(disk.used / disk.total * 100, 1)
+    except OSError:
+        disk_pct = None
+    if disk_pct is not None and disk_pct >= DISK_ALERT_PERCENT:
+        problems.append({'code': 'disk_almost_full', 'severity': 'warning',
+                          'message': f'Disk terpakai {disk_pct}%', 'percent': disk_pct})
+
+    qsize = _violation_queue.qsize()
+    if qsize >= VIOLATION_QUEUE_ALERT_SIZE:
+        problems.append({'code': 'violation_queue_backlog', 'severity': 'critical',
+                          'message': f'Antrian tulis pelanggaran menumpuk ({qsize} item) — DB writer macet?',
+                          'queue_size': qsize})
+
+    offline_cams = []
+    now = time.time()
+    for cid, cs in list(camera_streams.items()):
+        if not cs.connected:
+            since = _cam_offline_since.setdefault(cid, now)
+            offline_for = now - since
+            if offline_for >= CAMERA_OFFLINE_ALERT_SEC:
+                offline_cams.append({'cam_id': cid, 'offline_sec': round(offline_for)})
+        else:
+            _cam_offline_since.pop(cid, None)
+    if offline_cams:
+        problems.append({'code': 'camera_offline', 'severity': 'warning',
+                          'message': f'{len(offline_cams)} kamera offline > {CAMERA_OFFLINE_ALERT_SEC // 60} menit',
+                          'cameras': offline_cams})
+
+    status = 'ok'
+    if any(p['severity'] == 'critical' for p in problems):
+        status = 'critical'
+    elif problems:
+        status = 'degraded'
+
+    return {
+        'status': status,
+        'uptime_sec': round(time.time() - APP_START_TIME),
+        'model_loaded': model_ok,
+        'device': _device,
+        'cameras_active': _raw_active_camera_count(),
+        'cameras_online': sum(1 for cs in camera_streams.values() if cs.connected),
+        'disk_used_percent': disk_pct,
+        'violation_queue_size': qsize,
+        'inference_heartbeat_age_sec': round(infer_age, 1),
+        'problems': problems,
+    }
+
+def _health_monitor_worker():
+    """Cek berkala + tulis ke incidents.log saat status berubah jadi
+    bermasalah (atau masih bermasalah setelah INCIDENT_REPEAT_ALERT_SEC).
+    Ini yang bikin masalah "kebaca" tanpa harus buka dashboard/log manual."""
+    while True:
+        try:
+            snap = get_health_snapshot()
+            seen_codes = set()
+            for p in snap['problems']:
+                seen_codes.add(p['code'])
+                if _should_alert(p['code']):
+                    log_incident(p['severity'], p['code'], p['message'],
+                                 **{k: v for k, v in p.items() if k not in ('code', 'severity', 'message')})
+            # Bersihkan status "sudah pernah alert" untuk code yang sekarang sudah normal
+            # lagi, supaya kalau bermasalah LAGI nanti, langsung dianggap kejadian baru.
+            for code in list(_incident_last_sent.keys()):
+                if code not in seen_codes:
+                    _clear_alert(code)
+        except Exception as e:
+            print(f"[HEALTH MONITOR] Error: {e}")
+        time.sleep(HEALTH_CHECK_INTERVAL_SEC)
+
 
 def start_all_cameras():
     rows = db_execute("SELECT id, name, url FROM cameras WHERE enabled=1", fetch=True)
@@ -1217,6 +1437,21 @@ def serve_foto(filename):
 def api_info():
     ip = get_local_ip()
     return jsonify({'local_ip': ip, 'port': 5000, 'access_url': f'http://{ip}:5000'})
+
+@app.route('/healthz')
+def healthz():
+    """Tanpa login (dipakai Docker HEALTHCHECK / watchdog eksternal — lihat
+    monitor.py). Sengaja tidak menyertakan nama/URL kamera supaya tidak bocor
+    ke pihak yang belum authenticated, cuma id + status."""
+    snap = get_health_snapshot()
+    # HTTP 503 cuma untuk 'critical' (proses benar-benar rusak: model gagal
+    # load, inference hang) — supaya Docker/orchestrator restart proses.
+    # 'degraded' (mis. kamera offline, disk penuh) TETAP 200: restart
+    # container tidak akan memperbaiki kamera CCTV yang mati atau disk yang
+    # penuh, jadi tidak perlu memicu restart-loop yang sia-sia. Watchdog
+    # (monitor.py) tetap mengirim alert untuk kedua status lewat incidents.log.
+    code = 503 if snap['status'] == 'critical' else 200
+    return jsonify(snap), code
 
 @app.route('/api/auth/change-password', methods=['POST'])
 @login_required
@@ -1388,7 +1623,7 @@ def gen_mjpeg(cid):
             jpeg = cs.get_jpeg()
             if jpeg:
                 yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n')
-        time.sleep(1.0 / max(settings['stream_fps'], 1))
+        time.sleep(1.0 / max(_effective_stream_fps(), 1))
 
 @app.route('/api/stream/<int:cid>')
 @login_required
@@ -1469,6 +1704,7 @@ if __name__ == '__main__':
     NUM_WORKERS = 1
     for _ in range(NUM_WORKERS):
         threading.Thread(target=_inference_worker, daemon=True).start()
+    threading.Thread(target=_health_monitor_worker, daemon=True).start()
     start_all_cameras()
     local_ip = get_local_ip()
     print("=" * 60)
@@ -1481,7 +1717,7 @@ if __name__ == '__main__':
         print(f"  Default login   : admin / (lihat README — wajib diganti di login pertama)")
     print(f"  Violation delay : {settings['violation_delay']}s")
     print(f"  Confidence      : {settings['confidence']}")
-    print(f"  Stream FPS cap  : {settings['stream_fps']}")
+    print(f"  Stream FPS base : {settings['stream_fps']} (adaptif {STREAM_FPS_MIN}-{STREAM_FPS_MAX} fps sesuai jumlah kamera aktif)")
     print(f"  DVRIP support   : {'YES' if DVRIP_AVAILABLE else 'NO (install python-dvr + av)'}")
     print("=" * 60)
 

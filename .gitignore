@@ -3,6 +3,7 @@ logging.db
 logging.db-shm
 logging.db-wal
 data/violations/
+data/logs/
 backups/
 proxy/certs/
 .vscode/
