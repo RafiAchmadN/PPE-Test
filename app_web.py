@@ -184,7 +184,11 @@ settings = {
     'confidence': 0.5,          # threshold untuk PPE class (helmet, rompi, dll)
     'person_confidence': 0.7,   # threshold khusus class Person (lebih tinggi = kurangi false detect)
     'inference_enabled': True,
-    'stream_fps': 5,             # max fps for MJPEG stream
+    'stream_fps': 5.0,           # max fps for MJPEG stream -- float (bukan int)
+                                 # supaya nilai pecahan (mis. 0.25) tidak
+                                 # dibulatkan paksa ke 0 oleh int(float(...))
+                                 # di api_settings_update() -- perlu bisa di
+                                 # bawah 1 untuk koneksi yang sangat lambat.
     'stream_width': 480,        # lebar resize frame stream (px) — sebelumnya
                                  # hardcode 640 tanpa bisa diatur. Diturunkan
                                  # dari 640 karena di lapangan (koneksi lewat
@@ -1379,7 +1383,16 @@ camera_streams = {}
 # tidak pernah jadi 0 fps (macet total) ataupun meledak tak terbatas saat
 # cuma 1 kamera yang aktif.
 STREAM_FPS_REFERENCE_CAMERAS = 4
-STREAM_FPS_MIN = 2
+# MIN dulu 2 -- itu sendiri sudah lebih tinggi dari yang muat di koneksi
+# ~7-10 KB/s yang terukur di lapangan (2fps x ~3.4KB/frame minimum sudah
+# ~6.8 KB/s, hampir menghabiskan seluruh jatah bandwidth CUMA untuk stream
+# satu kamera, sebelum ditambah trafik lain). Target yang MUSTAHIL dicapai
+# terus-menerus itulah yang bikin video "selalu" patah parah, bukan cuma
+# sesekali -- badge/log fps tetap nunjuk ke target ini (lihat get_info()),
+# bukan kecepatan yang benar-benar sampai ke client, jadi kelihatan
+# kontradiktif ("fps tinggi" tapi macet). Diturunkan supaya operator bisa
+# menyetel target yang BENERAN bisa dicapai di koneksi lambat.
+STREAM_FPS_MIN = 0.5
 STREAM_FPS_MAX = 15
 
 def _raw_active_camera_count():

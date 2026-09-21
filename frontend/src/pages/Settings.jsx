@@ -271,12 +271,12 @@ export default function Settings() {
             onChange={(e) => updateField('person_confidence', e.target.value)}
           />
         </SettingRow>
-        <SettingRow label="Stream FPS (base)" desc="Target fps saat 4 kamera aktif bersamaan — otomatis naik jika kamera aktif sedikit, turun jika banyak (2-15 fps)">
+        <SettingRow label="Stream FPS (base)" desc="Target fps saat 4 kamera aktif bersamaan — otomatis naik jika kamera aktif sedikit, turun jika banyak (0.5-15 fps). Di koneksi sangat lambat (VPN sempit dll), coba 0.25-0.5">
           <input
             type="number"
-            min="1"
+            min="0.25"
             max="30"
-            step="1"
+            step="0.25"
             className="input input-bordered w-[100px] text-right font-mono-app"
             value={settings.stream_fps}
             onChange={(e) => updateField('stream_fps', e.target.value)}
