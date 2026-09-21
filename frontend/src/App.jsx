@@ -51,7 +51,13 @@ function PublicOnlyRoute({ children }) {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    // basename WAJIB disamakan dengan Vite `base` (vite.config.js) — tanpa ini,
+    // refresh/reload di path manapun selain "/" (mis. /ppe/cameras) tidak
+    // cocok dengan route manapun, jatuh ke catch-all, lalu <Navigate to="/">
+    // menulis URL ABSOLUT root domain (kehilangan prefix /ppe) alih-alih /ppe/.
+    // import.meta.env.BASE_URL otomatis ikut nilai `base` yang sama dipakai
+    // asset (termasuk override VITE_BASE kalau suatu saat pindah subpath).
+    <BrowserRouter basename={import.meta.env.BASE_URL}>
       <AuthProvider>
         <Suspense fallback={<FullScreenSpinner />}>
           <Routes>
