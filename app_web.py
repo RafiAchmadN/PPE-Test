@@ -496,6 +496,20 @@ def init_db():
         conn.commit()
         print("[MIGRATE] Done. Backfilled jenis from existing Bukti filenames.")
 
+    # ── Index untuk tabel `data` ──
+    # Tidak pernah ada index sama sekali sebelum ini -- setiap query yang
+    # filter/group by Tanggal, Bukti, atau jenis (api_stats dipanggil tiap
+    # 15 detik oleh Dashboard, serve_foto, archive/retention worker) jadi
+    # full table scan. Di instance dengan riwayat pelanggaran menumpuk banyak
+    # (lihat komentar soal insiden 1,1 juta file), ini yang bikin /api/stats
+    # butuh belasan detik. CREATE INDEX IF NOT EXISTS aman dijalankan tiap
+    # startup -- baru benar-benar membangun index sekali (bisa makan waktu
+    # kalau tabelnya sudah besar), setelah itu tinggal no-op cepat.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_data_tanggal ON data(Tanggal)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_data_bukti ON data(Bukti)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_data_jenis ON data(jenis)")
+    conn.commit()
+
     # Persistent secret key (survives restart)
     row = conn.execute("SELECT value FROM app_settings WHERE key='secret_key'").fetchone()
     if not row:
