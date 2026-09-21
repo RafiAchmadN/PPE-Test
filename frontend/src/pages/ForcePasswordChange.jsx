@@ -48,14 +48,14 @@ export default function ForcePasswordChange() {
             </div>
             <div>
               <label className="block text-xs uppercase tracking-wide text-base-content/60 mb-1.5">
-                Password Baru (min. 6 karakter)
+                Password Baru (min. 8 karakter)
               </label>
               <input
                 type="password"
                 className="input input-bordered w-full"
                 autoComplete="new-password"
                 required
-                minLength={6}
+                minLength={8}
                 value={pwNew}
                 onChange={(e) => setPwNew(e.target.value)}
               />

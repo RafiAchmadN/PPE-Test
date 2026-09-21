@@ -50,10 +50,10 @@ function PublicOnlyRoute({ children }) {
 }
 
 function AdminOnlyRoute({ children }) {
-  // Backend sudah menolak endpoint kamera untuk role non-admin (403) --
-  // guard ini cuma defense-in-depth di UI, supaya akun 'user' yang buka
-  // /manage langsung lewat URL tidak nyasar ke halaman yang tombol-tombolnya
-  // pasti gagal, langsung dibalikin ke dashboard.
+  // Backend sudah menolak endpoint kamera/settings/users untuk role non-admin
+  // (403) -- guard ini cuma defense-in-depth di UI, supaya akun 'user' yang
+  // buka /manage atau /settings langsung lewat URL tidak nyasar ke halaman
+  // yang isinya pasti gagal/kosong, langsung dibalikin ke dashboard.
   const { isAdmin } = useAuth();
   if (!isAdmin) return <Navigate to="/" replace />;
   return children;
@@ -91,7 +91,14 @@ export default function App() {
                 }
               />
               <Route path="logs" element={<Logs />} />
-              <Route path="settings" element={<Settings />} />
+              <Route
+                path="settings"
+                element={
+                  <AdminOnlyRoute>
+                    <Settings />
+                  </AdminOnlyRoute>
+                }
+              />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

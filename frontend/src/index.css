@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @plugin "daisyui" {
-  themes: heti --default;
+  themes: heti --default, heti-dark;
 }
 
 @plugin "daisyui/theme" {
@@ -26,6 +26,37 @@
   --color-warning: #d97706;
   --color-warning-content: #ffffff;
   --color-error: #dc2626;
+  --color-error-content: #ffffff;
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+@plugin "daisyui/theme" {
+  name: "heti-dark";
+  color-scheme: dark;
+  --color-base-100: #0f1621;
+  --color-base-200: #16202e;
+  --color-base-300: #24313f;
+  --color-base-content: #e2e8f0;
+  --color-primary: #2596e0;
+  --color-primary-content: #ffffff;
+  --color-secondary: #9463f5;
+  --color-secondary-content: #ffffff;
+  --color-accent: #3f7fc4;
+  --color-accent-content: #ffffff;
+  --color-neutral: #0a1826;
+  --color-neutral-content: #cbd8e8;
+  --color-info: #2596e0;
+  --color-info-content: #ffffff;
+  --color-success: #22c55e;
+  --color-success-content: #0a1826;
+  --color-warning: #f59e0b;
+  --color-warning-content: #0a1826;
+  --color-error: #ef4444;
   --color-error-content: #ffffff;
   --radius-selector: 0.5rem;
   --radius-field: 0.5rem;

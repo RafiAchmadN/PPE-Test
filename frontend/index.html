@@ -6,6 +6,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <title>PPE Monitoring System</title>
+    <script>
+      // Set data-theme SEBELUM React mount, biar tidak ada kedipan tema
+      // terang sekilas sebelum useTheme (src/hooks/useTheme.js) sempat jalan.
+      (function () {
+        try {
+          var saved = localStorage.getItem('ppe-theme');
+          var dark = saved ? saved === 'heti-dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+          document.documentElement.setAttribute('data-theme', dark ? 'heti-dark' : 'heti');
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

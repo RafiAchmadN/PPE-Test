@@ -43,7 +43,8 @@ MAPPER adalah sistem deteksi APD otomatis yang membaca feed video CCTV secara re
 - **Deteksi Real-time** — Inferensi YOLOv11 pada setiap frame CCTV dengan overlay bounding box
 - **Person-gated Detection** — Evaluasi kepatuhan APD hanya pada area yang teridentifikasi sebagai pekerja, meminimalkan false positive
 - **Multi-kamera** — Mendukung banyak kamera CCTV (RTSP, webcam, file video, YouTube)
-- **Dashboard Web** — Monitoring real-time dengan statistik kepatuhan, riwayat pelanggaran, dan manajemen kamera (CRUD)
+- **Dashboard Web** — Monitoring real-time dengan statistik kepatuhan, riwayat pelanggaran, manajemen kamera (CRUD), mode terang/gelap
+- **Multi-user & Role** — Login email + signup mandiri (role `user`), akun `admin` kelola akun lain (Manajemen Akun)
 - **Auto-logging** — Pelanggaran otomatis dicatat ke SQLite dengan snapshot JPEG
 - **GPU Support** — CUDA support (RTX 5060 Blackwell sm_120 via CUDA 12.8 + PyTorch cu128), auto-fallback ke CPU
 - **Docker Deployment** — Single command deploy dengan Docker Compose
@@ -203,18 +204,27 @@ Buka browser: `https://localhost:8443` (terima peringatan sertifikat
 self-signed di browser — sekali saja per browser).
 
 **Dua akun default dibuat otomatis saat pertama kali jalan** (lihat juga pesan
-di log startup container), keduanya wajib ganti password saat login pertama:
+di log startup container), keduanya wajib ganti password saat login pertama.
+Login pakai **email**, bukan username bebas:
 
-| Username | Password default | Role | Bisa apa |
-|----------|-------------------|------|----------|
-| `admin`  | `admin123`        | `admin` | Semua fitur, termasuk kelola kamera, Settings deteksi, dan Manajemen Akun (tambah/ubah role/reset password/hapus akun lain) |
-| `test`   | `test123`         | `user`  | Lihat dashboard, live cameras, logs, dan ganti password sendiri — tidak bisa kelola kamera/Settings/akun lain |
+| Email | Password default | Role | Bisa apa |
+|-------|-------------------|------|----------|
+| `admin@example.com` | `admin1234` | `admin` | Semua fitur, termasuk kelola kamera, Settings deteksi, dan Manajemen Akun (tambah/ubah role/reset password/hapus akun lain) |
+| `test@example.com`  | `test1234`  | `user`  | Lihat dashboard, live cameras, logs — tidak bisa kelola kamera/Settings/akun lain |
 
+Password minimal 8 karakter di semua endpoint yang set/ganti password.
 Pengunjung baru juga bisa **daftar sendiri** lewat tab "Daftar" di halaman
-login — akun hasil signup selalu dapat role `user` (tidak pernah `admin`,
-dipaksa di backend supaya tidak ada jalan eskalasi privilege lewat signup).
-Untuk menaikkan seseorang jadi admin, akun admin yang sudah ada perlu ubah
-role-nya lewat Settings → Manajemen Akun.
+login (username wajib format email) — akun hasil signup selalu dapat role
+`user` (tidak pernah `admin`, dipaksa di backend supaya tidak ada jalan
+eskalasi privilege lewat signup). Untuk menaikkan seseorang jadi admin, akun
+admin yang sudah ada perlu ubah role-nya lewat Settings → Manajemen Akun —
+di situ juga tempat admin reset password akun lain (tidak ada fitur "ganti
+password sendiri" yang terpisah lagi, supaya tidak ada dua jalan berbeda
+untuk hal yang sama; satu-satunya sisa alur ganti password mandiri adalah
+paksaan ganti password default di login pertama).
+
+UI juga punya toggle mode terang/gelap (ikon matahari/bulan di pojok kanan
+atas dashboard) — preferensinya tersimpan per browser.
 
 ### 5. Update Setelah Pull
 ```bash
@@ -322,10 +332,11 @@ volumes:
   - **Merah**: Pelanggaran APD terdeteksi
 - Menu **Logs** → filter tanggal → lihat riwayat + snapshot
 
-### Mengubah Password Admin
-Menu **Settings** → **Change Password** → isi password baru. Login pertama
-kali (password masih default) akan otomatis diarahkan ke layar ganti password
-sebelum bisa mengakses menu lain.
+### Ganti Password Default (login pertama)
+Login pertama kali (password masih default) otomatis diarahkan ke layar
+wajib-ganti-password sebelum bisa mengakses menu lain. Di luar itu, tidak
+ada fitur "ganti password sendiri" mandiri — untuk reset password (akun
+sendiri atau akun lain), admin lakukan lewat Settings → **Manajemen Akun**.
 
 ---
 
@@ -340,14 +351,15 @@ role `user` dengan `403`.
 ```http
 POST /api/auth/login
 Content-Type: application/json
-{"username": "admin", "password": "<password admin>"}
+{"username": "admin@example.com", "password": "<password admin>"}
 
-POST /api/auth/register              # Signup publik -- role SELALU "user"
-{"username": "...", "password": "..."}
+POST /api/auth/register              # Signup publik -- role SELALU "user", username wajib format email
+{"username": "nama@contoh.com", "password": "..."}
 
 POST /api/auth/logout
 GET  /api/auth/status                # {"logged_in", "username", "role", "must_change_password", "demo_mode"}
-POST /api/auth/change-password       # {"current": "...", "new": "..."} — ganti password AKUN SENDIRI, dinonaktifkan saat DEMO_MODE
+POST /api/auth/change-password       # {"current": "...", "new": "..."} — HANYA dipakai alur wajib-ganti-password
+                                      # default (bukan fitur mandiri di UI), dinonaktifkan saat DEMO_MODE
 ```
 
 ### Manajemen Akun (admin only)
@@ -437,14 +449,14 @@ CREATE TABLE app_settings (
 ```sql
 CREATE TABLE users (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-    username              TEXT NOT NULL UNIQUE,
-    password_hash         TEXT NOT NULL,
+    username              TEXT NOT NULL UNIQUE,  -- format email, lihat _is_valid_email()
+    password_hash         TEXT NOT NULL,          -- minimal 8 karakter, lihat MIN_PASSWORD_LEN
     role                  TEXT NOT NULL DEFAULT 'user',  -- 'admin' | 'user'
     must_change_password  INTEGER NOT NULL DEFAULT 0,
     created_at            TEXT DEFAULT (datetime('now','localtime'))
 );
--- Diisi otomatis saat pertama kali jalan: admin/admin123 (role admin) dan
--- test/test123 (role user) -- lihat init_db() di app_web.py.
+-- Diisi otomatis saat pertama kali jalan: admin@example.com/admin1234 (role
+-- admin) dan test@example.com/test1234 (role user) -- lihat init_db().
 ```
 
 ---

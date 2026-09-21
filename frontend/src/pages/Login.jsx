@@ -69,14 +69,13 @@ export default function Login() {
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div>
-              <label className="block text-xs uppercase tracking-wide text-base-content/60 mb-1.5">Username</label>
+              <label className="block text-xs uppercase tracking-wide text-base-content/60 mb-1.5">Email</label>
               <input
-                type="text"
+                type="email"
                 className="input input-bordered w-full"
-                placeholder={mode === 'signup' ? 'min. 3 karakter' : 'admin'}
+                placeholder="nama@contoh.com"
                 autoComplete="username"
                 required
-                minLength={mode === 'signup' ? 3 : undefined}
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
               />
@@ -86,10 +85,10 @@ export default function Login() {
               <input
                 type="password"
                 className="input input-bordered w-full"
-                placeholder={mode === 'signup' ? 'min. 6 karakter' : '••••••••'}
+                placeholder={mode === 'signup' ? 'min. 8 karakter' : '••••••••'}
                 autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
                 required
-                minLength={mode === 'signup' ? 6 : undefined}
+                minLength={mode === 'signup' ? 8 : undefined}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />

@@ -7,6 +7,7 @@
 # =============================================================================
 
 import os
+import re
 import sys
 import json
 import time
@@ -217,6 +218,19 @@ def _get_must_change_password(user_id):
 def _admin_count():
     row = db_execute("SELECT COUNT(*) c FROM users WHERE role='admin'", fetchone=True)
     return row['c'] if row else 0
+
+# Login pakai format email (mis. nama@perusahaan.com), samakan dengan
+# konvensi akun di ekosistem insamo lainnya (PATRIOT, dsb) -- bukan username
+# bebas. MIN_PASSWORD_LEN dipakai konsisten di semua endpoint yang set/ganti
+# password (register, buat akun admin, reset password, ganti password sendiri).
+MIN_PASSWORD_LEN = 8
+_EMAIL_RE = re.compile(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+
+def _normalize_email(s):
+    return (s or '').strip().lower()
+
+def _is_valid_email(s):
+    return bool(_EMAIL_RE.match(s or ''))
 
 def _mask_url(url):
     """Sembunyikan kredensial (user:pass@) dari URL kamera untuk response list.
@@ -459,21 +473,25 @@ def init_db():
         if old_hash:
             old_mcp = conn.execute("SELECT value FROM app_settings WHERE key='must_change_password'").fetchone()
             mcp = 1 if (old_mcp is None or old_mcp[0] == '1') else 0
+            # Username lama 'admin' (bukan email) diganti ke format email supaya
+            # konsisten dengan akun baru — password TIDAK berubah, cuma identitas
+            # login-nya. Kalau nanti bentrok sama akun email lain, staf yang
+            # sudah tahu ini tinggal login pakai admin@example.com.
             conn.execute(
                 "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,?)",
-                ('admin', old_hash[0], 'admin', mcp))
-            print("[MIGRATE] Akun 'admin' lama dipindah ke tabel users (password tidak berubah).")
+                ('admin@example.com', old_hash[0], 'admin', mcp))
+            print("[MIGRATE] Akun admin lama dipindah ke tabel users sebagai admin@example.com (password tidak berubah).")
         else:
             conn.execute(
                 "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,1)",
-                ('admin', generate_password_hash('admin123'), 'admin'))
-            print("[INIT] Akun default dibuat: admin / admin123 (wajib diganti saat login pertama).")
-        # Akun 'test' (role biasa, bukan admin) — untuk QA/demo peran non-admin,
-        # skema lama tidak pernah punya ini jadi selalu dibuat baru di sini.
+                ('admin@example.com', generate_password_hash('admin1234'), 'admin'))
+            print("[INIT] Akun default dibuat: admin@example.com / admin1234 (wajib diganti saat login pertama).")
+        # Akun 'user' contoh (role biasa, bukan admin) — untuk QA/demo peran
+        # non-admin, skema lama tidak pernah punya ini jadi selalu dibuat baru.
         conn.execute(
             "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,1)",
-            ('test', generate_password_hash('test123'), 'user'))
-        print("[INIT] Akun default dibuat: test / test123 (role user, wajib diganti saat login pertama).")
+            ('test@example.com', generate_password_hash('test1234'), 'user'))
+        print("[INIT] Akun default dibuat: test@example.com / test1234 (role user, wajib diganti saat login pertama).")
         conn.commit()
 
     # Load saved settings
@@ -1427,7 +1445,7 @@ def restart_camera(cid):
 @limiter.limit("10 per minute")
 def login_post():
     d = request.json or {}
-    username = d.get('username', '').strip()
+    username = _normalize_email(d.get('username', ''))
     password = d.get('password', '')
     row = db_execute("SELECT id, password_hash, role FROM users WHERE username=?", (username,), fetchone=True)
     if not row or not check_password_hash(row['password_hash'], password):
@@ -1447,12 +1465,12 @@ def register():
     """Signup publik — SELALU role 'user', tidak pernah menerima role dari
     client, supaya tidak ada jalan bikin akun admin lewat endpoint ini."""
     d = request.json or {}
-    username = (d.get('username') or '').strip()
+    username = _normalize_email(d.get('username'))
     password = d.get('password') or ''
-    if len(username) < 3:
-        return jsonify({'error': 'Username minimal 3 karakter'}), 400
-    if len(password) < 6:
-        return jsonify({'error': 'Password minimal 6 karakter'}), 400
+    if not _is_valid_email(username):
+        return jsonify({'error': 'Gunakan format email, mis. nama@contoh.com'}), 400
+    if len(password) < MIN_PASSWORD_LEN:
+        return jsonify({'error': f'Password minimal {MIN_PASSWORD_LEN} karakter'}), 400
     try:
         db_execute(
             "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,0)",
@@ -1520,8 +1538,10 @@ def healthz():
 @login_required
 @demo_readonly
 def change_password():
-    """Ganti password AKUN SENDIRI (siapapun yang login, admin atau user).
-    Untuk reset password akun lain, lihat PUT /api/users/<id> (admin_required)."""
+    """Ganti password AKUN SENDIRI. Dipakai HANYA oleh alur wajib-ganti-password
+    default (ForcePasswordChange, lihat frontend) -- fitur "ganti password"
+    mandiri di Settings sudah dihapus karena tumpang tindih dengan admin
+    me-reset password lewat PUT /api/users/<id> (admin_required)."""
     d = request.json or {}
     current = d.get('current', '')
     new_pw  = d.get('new', '')
@@ -1529,8 +1549,8 @@ def change_password():
     row = db_execute("SELECT password_hash FROM users WHERE id=?", (uid,), fetchone=True)
     if not row or not check_password_hash(row['password_hash'], current):
         return jsonify({'error': 'Password lama salah'}), 401
-    if len(new_pw) < 6:
-        return jsonify({'error': 'Password baru minimal 6 karakter'}), 400
+    if len(new_pw) < MIN_PASSWORD_LEN:
+        return jsonify({'error': f'Password baru minimal {MIN_PASSWORD_LEN} karakter'}), 400
     db_execute("UPDATE users SET password_hash=?, must_change_password=0 WHERE id=?",
                (generate_password_hash(new_pw), uid))
     return jsonify({'ok': True})
@@ -1549,15 +1569,15 @@ def api_users_list():
 @demo_readonly
 def api_users_create():
     d = request.json or {}
-    username = (d.get('username') or '').strip()
+    username = _normalize_email(d.get('username'))
     password = d.get('password') or ''
     role = d.get('role') or 'user'
     if role not in ('admin', 'user'):
         return jsonify({'error': 'Role tidak valid'}), 400
-    if len(username) < 3:
-        return jsonify({'error': 'Username minimal 3 karakter'}), 400
-    if len(password) < 6:
-        return jsonify({'error': 'Password minimal 6 karakter'}), 400
+    if not _is_valid_email(username):
+        return jsonify({'error': 'Gunakan format email, mis. nama@contoh.com'}), 400
+    if len(password) < MIN_PASSWORD_LEN:
+        return jsonify({'error': f'Password minimal {MIN_PASSWORD_LEN} karakter'}), 400
     try:
         uid = db_execute(
             "INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?,?,?,1)",
@@ -1587,8 +1607,8 @@ def api_users_update(uid):
         fields.append("role=?")
         params.append(role)
     if d.get('password'):
-        if len(d['password']) < 6:
-            return jsonify({'error': 'Password minimal 6 karakter'}), 400
+        if len(d['password']) < MIN_PASSWORD_LEN:
+            return jsonify({'error': f'Password minimal {MIN_PASSWORD_LEN} karakter'}), 400
         fields.append("password_hash=?")
         params.append(generate_password_hash(d['password']))
         fields.append("must_change_password=1")
