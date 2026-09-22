@@ -1018,7 +1018,13 @@ class CameraStream:
                     print(f"[YT-DLP] Resolved: {url[:50]}... -> stream URL")
                     return resolved, None
                 else:
-                    return None, f"yt-dlp failed: {result.stderr.strip()[:80]}"
+                    # Baris PERTAMA stderr yt-dlp biasanya cuma WARNING, error
+                    # sebenarnya ada di baris TERAKHIR -- potongan 80 karakter
+                    # dari baris pertama sering kepotong di tengah kalimat
+                    # tanpa info yang berguna (mis. "...Only deno is ").
+                    err_lines = [l for l in result.stderr.strip().splitlines() if l.strip()]
+                    err_msg = err_lines[-1] if err_lines else 'unknown error'
+                    return None, f"yt-dlp failed: {err_msg[:200]}"
             except FileNotFoundError:
                 return None, "YouTube requires yt-dlp (pip install yt-dlp)"
             except subprocess.TimeoutExpired:
