@@ -1,0 +1,6 @@
+# Script yang dijalankan DI DALAM container Linux (docker exec/cp) wajib LF --
+# kalau ke-checkout jadi CRLF (core.autocrlf=true di Windows), bash di Linux
+# gagal jalanin file-nya ("bad interpreter", $'\r': command not found).
+*.sh text eol=lf
+*.py text eol=lf
+Dockerfile text eol=lf
